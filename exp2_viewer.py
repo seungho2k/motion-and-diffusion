@@ -33,8 +33,10 @@ def main():
     rt = AMDMRuntime("lafan1")
     T = rt.T
     server = viser.ViserServer(port=8080)
+    server.gui.configure_theme(dark_mode=True)
     server.scene.set_up_direction("+y")
-    server.scene.add_grid("/grid", width=40, height=40, plane="xz", cell_size=0.5, section_size=2.0)
+    grid = server.scene.add_grid("/grid", width=40, height=40, plane="xz", cell_size=0.5, section_size=2.0,
+                                 cell_color=(40, 40, 40), section_color=(70, 70, 70), shadow_opacity=0.0)
 
     state = {"res": None, "frame": 0, "playing": True}
     lock = threading.Lock()
@@ -64,9 +66,11 @@ def main():
             hint="position: joint-position channels (spheres scatter freely). "
                  "rotation: FK from 6D rotations (bone lengths kept, skeleton twists).")
         g_show = server.gui.add_dropdown("show", ("xt", "x0", "xt + x0 ghost"), initial_value="xt")
-        g_radius = server.gui.add_slider("sphere radius", 0.01, 0.15, 0.005, 0.045)
+        g_jsize = server.gui.add_slider("joint size", 0.005, 0.2, 0.005, 0.04)
         g_bones = server.gui.add_checkbox("bones", True)
-        g_bg = server.gui.add_rgb("export background", (255, 255, 255))
+        g_bthick = server.gui.add_slider("bone width", 0.002, 0.05, 0.001, 0.008)
+        g_grid = server.gui.add_checkbox("grid", True)
+        g_bg = server.gui.add_rgb("background", (0, 0, 0))
     with server.gui.add_folder("Camera"):
         g_lock = server.gui.add_checkbox("track joint", True)
         g_joint = server.gui.add_dropdown("joint", tuple(rt.joint_names), initial_value="Hips")
@@ -75,28 +79,61 @@ def main():
         g_dist = server.gui.add_slider("distance", 0.3, 10.0, 0.05, 3.0)
         g_fov = server.gui.add_slider("fov", 10.0, 100.0, 1.0, 40.0)
     with server.gui.add_folder("Playback"):
-        g_play = server.gui.add_checkbox("playing", True)
+        g_play = server.gui.add_checkbox("playing", True, hint="space: play / pause")
         g_frame = server.gui.add_slider("frame", 0, 299, 1, 0)
         g_info = server.gui.add_markdown("")
         g_export = server.gui.add_button("Export MP4 (1080x1350)", color="green")
     plot_holder = {"h": None}
 
     # -------------------------------------------------------------- scene
-    sphere_h, ghost_h = [], []
+    # Joints and bones are both screen-facing flat circles (point clouds: unlit, no
+    # shadows, no anti-aliased edges). Bones are drawn as densely sampled circles so
+    # they share the joints' material and never show seams. x0 ghost in grey.
+    WHITE, GHOST = (255, 255, 255), (110, 110, 110)
+    zeros_j = np.zeros((rt.J, 3), np.float32)
 
-    def build_spheres():
-        for h in sphere_h + ghost_h:
-            h.remove()
-        sphere_h.clear()
-        ghost_h.clear()
-        r = g_radius.value
-        for j in range(rt.J):
-            sphere_h.append(server.scene.add_icosphere(f"/xt/j{j}", radius=r, color=(235, 235, 235)))
-            ghost_h.append(server.scene.add_icosphere(f"/x0/j{j}", radius=r * 0.8, color=(120, 160, 255), opacity=0.35))
+    def add_dots(name, color, size):
+        return server.scene.add_point_cloud(name, zeros_j, color, point_size=size,
+                                            point_shape="circle", point_shading="flat", precision="float32")
 
-    build_spheres()
-    bones_xt = server.scene.add_line_segments("/xt/bones", np.zeros((len(rt.links), 2, 3)), (200, 200, 200), thickness=0.012)
-    bones_x0 = server.scene.add_line_segments("/x0/bones", np.zeros((len(rt.links), 2, 3)), (120, 160, 255), thickness=0.008)
+    joints_xt = add_dots("/xt/joints", WHITE, g_jsize.value)
+    joints_x0 = add_dots("/x0/joints", GHOST, g_jsize.value)
+    bones_xt = add_dots("/xt/bones", WHITE, g_bthick.value)
+    bones_x0 = add_dots("/x0/bones", GHOST, g_bthick.value)
+
+    def bone_dots(j: np.ndarray, width: float, max_pts: int = 20000) -> np.ndarray:
+        a, b = j[rt.links[:, 0]], j[rt.links[:, 1]]
+        lengths = np.linalg.norm(b - a, axis=1)
+        step = max(width * 0.35, 1e-4)
+        n = np.clip(np.ceil(lengths / step).astype(int) + 1, 2, None)
+        if n.sum() > max_pts:
+            n = np.maximum(2, (n * max_pts / n.sum()).astype(int))
+        pts = [a[k] + np.linspace(0, 1, n[k])[:, None] * (b[k] - a[k]) for k in range(len(n))]
+        return np.concatenate(pts).astype(np.float32)
+
+    def apply_style(_=None):
+        for h in (joints_xt, joints_x0):
+            h.point_size = g_jsize.value
+        for h in (bones_xt, bones_x0):
+            h.point_size = g_bthick.value
+        grid.visible = g_grid.value
+        server.scene.set_background_image(np.full((4, 4, 3), g_bg.value, np.uint8))
+        show_frame(state["frame"])
+
+    # Space toggles playback. viser has no key-event API, but add_html injects raw
+    # HTML, so an inline onerror handler registers a window keydown listener that
+    # clicks the "playing" checkbox (which goes through the normal GUI update path).
+    server.gui.add_html("""<img src="data:," style="display:none" onerror="
+      if (!window.__vdcSpace) { window.__vdcSpace = true;
+        window.addEventListener('keydown', function (e) {
+          if (e.code !== 'Space' || e.repeat) return;
+          var a = document.activeElement;
+          if (a && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && a.type !== 'checkbox'))) return;
+          var el = Array.from(document.querySelectorAll('label, p, span, div'))
+            .find(function (n) { return n.childElementCount === 0 && n.textContent.trim() === 'playing'; });
+          if (el) { e.preventDefault(); e.stopPropagation(); el.click(); }
+        }, true);
+      }">""")
 
     def cam() -> TrackCam:
         return TrackCam(joint=rt.joint_names.index(g_joint.value), azimuth=g_az.value,
@@ -111,18 +148,16 @@ def main():
         main = res.joints_x0[i] if mode == "x0" else res.joints_xt[i]
         ghost_vis = mode == "xt + x0 ghost"
         with server.atomic():
-            for j, h in enumerate(sphere_h):
-                h.position = main[j]
-            for j, h in enumerate(ghost_h):
-                h.visible = ghost_vis
-                if ghost_vis:
-                    h.position = res.joints_x0[i][j]
+            joints_xt.points = main.astype(np.float32)
+            joints_x0.visible = ghost_vis
+            if ghost_vis:
+                joints_x0.points = res.joints_x0[i].astype(np.float32)
             bones_xt.visible = g_bones.value
             if g_bones.value:
-                bones_xt.points = main[rt.links]
+                bones_xt.points = bone_dots(main, g_bthick.value)
             bones_x0.visible = g_bones.value and ghost_vis
             if bones_x0.visible:
-                bones_x0.points = res.joints_x0[i][rt.links]
+                bones_x0.points = bone_dots(res.joints_x0[i], g_bthick.value)
             if move_clients and g_lock.value:
                 pos, wxyz = cam().pose(main)
                 for c in server.get_clients().values():
@@ -144,8 +179,7 @@ def main():
         x = np.arange(len(levels), dtype=np.float64)
         data = (x, levels.astype(np.float64))
         if plot_holder["h"] is not None:
-            plot_holder["h"].data = data
-            return
+            plot_holder["h"].remove()
         plot_holder["h"] = server.gui.add_uplot(
             data=data,
             series=(uplot.Series(label="frame"), uplot.Series(label="τ", stroke="#3b6cff", width=2)),
@@ -170,7 +204,8 @@ def main():
               g_nscale, g_ncoh, g_root, g_clip):
         h.on_update(lambda _: g_auto.value and regenerate())
     g_gen.on_click(regenerate)
-    g_radius.on_update(lambda _: (build_spheres(), show_frame(state["frame"])))
+    for h in (g_jsize, g_bthick, g_grid, g_bg):
+        h.on_update(apply_style)
     def redecode(_=None):
         with lock:
             if state["res"] is not None:
@@ -200,7 +235,7 @@ def main():
         stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
         path = os.path.join(OUT_DIR, f"exp2_{stamp}.mp4")
         meta = {"schedule": asdict(schedule()), "gen": asdict(params()), "camera": asdict(cam()),
-                "decode": g_decode.value, "show": g_show.value, "radius": g_radius.value, "background": list(g_bg.value)}
+                "decode": g_decode.value, "show": g_show.value, "joint_size": g_jsize.value, "bone_width": g_bthick.value, "grid": g_grid.value, "background": list(g_bg.value)}
         with open(path.replace(".mp4", ".json"), "w") as f:
             json.dump(meta, f, indent=2)
         g_export.disabled = True
@@ -226,6 +261,7 @@ def main():
 
     # -------------------------------------------------------------- loop
     regenerate()
+    apply_style()
     print("open http://localhost:8080")
     while True:
         t0 = time.time()
