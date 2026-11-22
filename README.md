@@ -28,8 +28,10 @@ result is fed back as the condition for the next frame. The viewer exposes:
 - **Display** — `joints from`: `position` (joint-position channels; spheres scatter freely) or
   `rotation` (FK from 6D local rotations; bone lengths kept, skeleton twists); xt / x0 / ghost.
   Joints and bones are flat, unlit white (#ffffff) screen-facing circles on a black background (no shadows);
-  joint size, bone width, grid and background colour are adjustable
-- **Camera** — tracks one joint at fixed azimuth / elevation / distance / fov (no smoothing)
+  joints / bones can be hidden; joint size, bone width, grid and background colour are adjustable
+- **Camera** — tracks one joint at fixed azimuth / elevation / distance / fov (no smoothing).
+  Orbiting / zooming in the viewport while tracking updates those values, so the new angle sticks;
+  `reset view` restores the defaults
 - **Playback** — `space` toggles play / pause
 - **Export MP4** — renders 1080×1350 @ 30 fps into `outputs/` with a JSON of all parameters
 

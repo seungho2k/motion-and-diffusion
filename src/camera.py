@@ -15,13 +15,27 @@ class TrackCam:
     fov: float = 40.0         # vertical fov, degrees
     target_offset: tuple = (0.0, 0.0, 0.0)
 
+    def target(self, joints: np.ndarray) -> np.ndarray:
+        return joints[self.joint] + np.asarray(self.target_offset, dtype=np.float64)
+
     def pose(self, joints: np.ndarray):
         """joints [J,3] -> (position [3], wxyz [4]) in viser's OpenCV camera convention."""
-        target = joints[self.joint] + np.asarray(self.target_offset)
+        target = self.target(joints)
         az, el = np.deg2rad(self.azimuth), np.deg2rad(self.elevation)
         offset = self.distance * np.array([np.cos(el) * np.sin(az), np.sin(el), np.cos(el) * np.cos(az)])
         pos = target + offset
         return pos, look_at_wxyz(pos, target)
+
+
+def orbit_from(position: np.ndarray, look_at: np.ndarray):
+    """Inverse of TrackCam's offset: camera position/look_at -> (azimuth, elevation, distance)."""
+    off = np.asarray(position, float) - np.asarray(look_at, float)
+    dist = float(np.linalg.norm(off))
+    if dist < 1e-9:
+        return None
+    el = float(np.rad2deg(np.arcsin(np.clip(off[1] / dist, -1.0, 1.0))))
+    az = float(np.rad2deg(np.arctan2(off[0], off[2])))
+    return az, el, dist
 
 
 def look_at_wxyz(pos, target, up=(0.0, 1.0, 0.0)) -> np.ndarray:

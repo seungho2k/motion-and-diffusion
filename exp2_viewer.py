@@ -13,6 +13,7 @@ import os
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import asdict
 
 import imageio.v2 as imageio
@@ -22,7 +23,7 @@ import viser.uplot as uplot
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 from amdm_runtime import DECODE_MODES, AMDMRuntime, GenParams  # noqa: E402
-from camera import TrackCam  # noqa: E402
+from camera import TrackCam, orbit_from  # noqa: E402
 from schedule import DipSchedule  # noqa: E402
 
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
@@ -67,17 +68,21 @@ def main():
                  "rotation: FK from 6D rotations (bone lengths kept, skeleton twists).")
         g_show = server.gui.add_dropdown("show", ("xt", "x0", "xt + x0 ghost"), initial_value="xt")
         g_jsize = server.gui.add_slider("joint size", 0.005, 0.2, 0.005, 0.04)
+        g_joints = server.gui.add_checkbox("joints", True)
         g_bones = server.gui.add_checkbox("bones", True)
         g_bthick = server.gui.add_slider("bone width", 0.002, 0.05, 0.001, 0.008)
         g_grid = server.gui.add_checkbox("grid", True)
         g_bg = server.gui.add_rgb("background", (0, 0, 0))
     with server.gui.add_folder("Camera"):
-        g_lock = server.gui.add_checkbox("track joint", True)
+        g_lock = server.gui.add_checkbox(
+            "track joint", True,
+            hint="While tracking, orbit / zoom / pan in the viewport to change the offset; sliders follow.")
         g_joint = server.gui.add_dropdown("joint", tuple(rt.joint_names), initial_value="Hips")
         g_az = server.gui.add_slider("azimuth", -180.0, 180.0, 1.0, 30.0)
-        g_el = server.gui.add_slider("elevation", -60.0, 80.0, 1.0, 10.0)
-        g_dist = server.gui.add_slider("distance", 0.3, 10.0, 0.05, 3.0)
+        g_el = server.gui.add_slider("elevation", -89.0, 89.0, 1.0, 10.0)
+        g_dist = server.gui.add_slider("distance", 0.1, 30.0, 0.05, 3.0)
         g_fov = server.gui.add_slider("fov", 10.0, 100.0, 1.0, 40.0)
+        g_reset = server.gui.add_button("reset view")
     with server.gui.add_folder("Playback"):
         g_play = server.gui.add_checkbox("playing", True, hint="space: play / pause")
         g_frame = server.gui.add_slider("frame", 0, 299, 1, 0)
@@ -137,7 +142,70 @@ def main():
 
     def cam() -> TrackCam:
         return TrackCam(joint=rt.joint_names.index(g_joint.value), azimuth=g_az.value,
-                        elevation=g_el.value, distance=g_dist.value, fov=g_fov.value)
+                        elevation=g_el.value, distance=g_dist.value, fov=g_fov.value,
+                        target_offset=tuple(state["target_offset"]))
+
+    # ---------------------------------------------------- tracking + user input
+    # The server re-poses every client camera each frame (position, then look_at).
+    # A client report is an echo of our own push if its position equals a position
+    # we recently sent (covers late and half-applied updates) or its orbit offset
+    # equals one we sent. Orbit / zoom always move the camera position to a new
+    # place, so anything else is the user; it is folded back into the azimuth /
+    # elevation / distance sliders. Pushing to that client pauses briefly so the
+    # drag isn't fought.
+    state["target_offset"] = np.zeros(3)
+    state["main"] = None                      # joints currently displayed [J,3]
+    sent: dict[int, deque] = {}               # client id -> recent (position, orbit offset)
+    hold_until: dict[int, float] = {}
+    HOLD_S = 0.35
+    CONNECT_GRACE_S = 1.0
+
+    def is_echo(cid: int, pos: np.ndarray, offset: np.ndarray) -> bool:
+        tol = 2e-3 * max(1.0, float(np.linalg.norm(offset)))
+        return any(np.allclose(pos, p, atol=tol) or np.allclose(offset, o, atol=tol)
+                   for p, o in sent.get(cid, ()))
+
+    def push_camera(main: np.ndarray):
+        tc = cam()
+        pos, _ = tc.pose(main)
+        target = tc.target(main)
+        now = time.time()
+        for cid, c in server.get_clients().items():
+            if now < hold_until.get(cid, 0.0):
+                continue
+            sent.setdefault(cid, deque(maxlen=240)).append((pos.copy(), pos - target))
+            c.camera.fov = np.deg2rad(g_fov.value)
+            c.camera.position = pos
+            c.camera.look_at = target
+
+    def on_client(client: viser.ClientHandle):
+        cid = client.client_id
+        connected_at = time.time()
+
+        @client.camera.on_update
+        def _(camera: viser.CameraHandle):
+            if not g_lock.value or state["main"] is None or time.time() - connected_at < CONNECT_GRACE_S:
+                return
+            pos, look = np.asarray(camera.position), np.asarray(camera.look_at)
+            if is_echo(cid, pos, pos - look):
+                return
+            orb = orbit_from(pos, look)
+            if orb is None:
+                return
+            hold_until[cid] = time.time() + HOLD_S
+            az, el, dist = orb
+            g_az.value = float(np.clip(round(az, 2), g_az.min, g_az.max))
+            g_el.value = float(np.clip(round(el, 2), g_el.min, g_el.max))
+            g_dist.value = float(np.clip(round(dist, 3), g_dist.min, g_dist.max))
+
+    server.on_client_connect(on_client)
+
+    @g_reset.on_click
+    def _(_):
+        state["target_offset"] = np.zeros(3)
+        hold_until.clear()
+        g_az.value, g_el.value, g_dist.value, g_fov.value = 30.0, 10.0, 3.0, 40.0
+        show_frame(state["frame"])
 
     def show_frame(i: int, move_clients: bool = True):
         res = state["res"]
@@ -147,10 +215,12 @@ def main():
         mode = g_show.value
         main = res.joints_x0[i] if mode == "x0" else res.joints_xt[i]
         ghost_vis = mode == "xt + x0 ghost"
+        state["main"] = main
         with server.atomic():
+            joints_xt.visible = g_joints.value
             joints_xt.points = main.astype(np.float32)
-            joints_x0.visible = ghost_vis
-            if ghost_vis:
+            joints_x0.visible = ghost_vis and g_joints.value
+            if joints_x0.visible:
                 joints_x0.points = res.joints_x0[i].astype(np.float32)
             bones_xt.visible = g_bones.value
             if g_bones.value:
@@ -159,11 +229,7 @@ def main():
             if bones_x0.visible:
                 bones_x0.points = bone_dots(res.joints_x0[i], g_bthick.value)
             if move_clients and g_lock.value:
-                pos, wxyz = cam().pose(main)
-                for c in server.get_clients().values():
-                    c.camera.fov = np.deg2rad(g_fov.value)
-                    c.camera.wxyz = wxyz
-                    c.camera.position = pos
+                push_camera(main)
         g_info.content = f"frame **{i}** / {len(res.levels) - 1} &nbsp; τ = **{res.levels[i]:.2f}** / {T}"
 
     def schedule() -> DipSchedule:
@@ -213,7 +279,7 @@ def main():
         show_frame(state["frame"])
     g_decode.on_update(redecode)
 
-    for h in (g_show, g_bones, g_lock, g_joint, g_az, g_el, g_dist, g_fov):
+    for h in (g_show, g_joints, g_bones, g_lock, g_joint, g_az, g_el, g_dist, g_fov):
         h.on_update(lambda _: show_frame(state["frame"]))
 
     def on_frame(_):
@@ -235,7 +301,7 @@ def main():
         stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
         path = os.path.join(OUT_DIR, f"exp2_{stamp}.mp4")
         meta = {"schedule": asdict(schedule()), "gen": asdict(params()), "camera": asdict(cam()),
-                "decode": g_decode.value, "show": g_show.value, "joint_size": g_jsize.value, "bone_width": g_bthick.value, "grid": g_grid.value, "background": list(g_bg.value)}
+                "decode": g_decode.value, "show": g_show.value, "joints": g_joints.value, "bones": g_bones.value, "joint_size": g_jsize.value, "bone_width": g_bthick.value, "grid": g_grid.value, "background": list(g_bg.value)}
         with open(path.replace(".mp4", ".json"), "w") as f:
             json.dump(meta, f, indent=2)
         g_export.disabled = True
