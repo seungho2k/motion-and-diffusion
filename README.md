@@ -35,7 +35,8 @@ result is fed back as the condition for the next frame. The viewer exposes:
   is sent, so that joint sits exactly at the view centre in the same update as the new pose; the camera
   itself stays put. `follow height` can freeze vertical tracking. Orbit / zoom / pan in the viewport work
   normally and are mirrored into the azimuth / elevation / distance sliders; `reset view` restores defaults.
-  Export renders from the viewer's current camera
+  `orthographic` removes perspective (telephoto approximation: 0.5° fov from far away with the same
+  framing, since viser has no orthographic camera). Export renders from the viewer's current camera
 - **Playback** — `space` toggles play / pause
 - **Export MP4** — renders 1080×1350 @ 30 fps into `outputs/` with a JSON of all parameters
 

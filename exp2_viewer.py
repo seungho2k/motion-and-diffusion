@@ -41,7 +41,7 @@ def main():
     # offset disagree). The camera stays put and looks at the origin.
     grid = server.scene.add_grid("/grid", width=40, height=40, plane="xz", cell_size=0.5, section_size=2.0,
                                  cell_color=(40, 40, 40), section_color=(70, 70, 70), shadow_opacity=0.0,
-                                 infinite_grid=True, fade_distance=200.0)
+                                 infinite_grid=True, fade_distance=200.0, fade_from="origin")
 
     state = {"res": None, "frame": 0, "playing": True}
     lock = threading.Lock()
@@ -91,6 +91,10 @@ def main():
         g_el = server.gui.add_slider("elevation", -89.0, 89.0, 1.0, 10.0)
         g_dist = server.gui.add_slider("distance", 0.1, 30.0, 0.05, 3.0)
         g_fov = server.gui.add_slider("fov", 10.0, 100.0, 1.0, 40.0)
+        g_ortho = server.gui.add_checkbox(
+            "orthographic", False,
+            hint="No perspective. viser has no orthographic camera, so this is a telephoto "
+                 "approximation (0.5° fov from far away, same framing as the fov/distance sliders).")
         g_reset = server.gui.add_button("reset view")
     with server.gui.add_folder("Playback"):
         g_play = server.gui.add_checkbox("playing", True, hint="space: play / pause")
@@ -188,11 +192,30 @@ def main():
     ignore_until: dict[int, float] = {}
     CONNECT_GRACE_S = 1.0
 
+    # Orthographic = telephoto approximation: the real camera uses ORTHO_FOV and
+    # sits `dist_scale()` times farther away, so the distance slider keeps meaning
+    # "framing as seen with the fov slider" in both modes.
+    ORTHO_FOV_DEG = 0.5
+
+    def real_fov_deg() -> float:
+        return ORTHO_FOV_DEG if g_ortho.value else g_fov.value
+
+    def dist_scale() -> float:
+        if not g_ortho.value:
+            return 1.0
+        return np.tan(np.deg2rad(g_fov.value) / 2) / np.tan(np.deg2rad(ORTHO_FOV_DEG) / 2)
+
     def push_camera(force: bool = False):
+        k = dist_scale()
+        real_dist = g_dist.value * k
+        offset, _ = TrackCam(azimuth=g_az.value, elevation=g_el.value,
+                             distance=real_dist).pose(np.zeros((rt.J, 3)))
         for cid, c in server.get_clients().items():
             look = np.zeros(3) if force else np.asarray(c.camera.look_at)
-            offset, _ = cam().pose(np.zeros((rt.J, 3)))  # orbit offset around the origin
-            c.camera.fov = np.deg2rad(g_fov.value)
+            c.camera.fov = np.deg2rad(real_fov_deg())
+            # near > ~1 hides viser's background image; 1.0 still gives mm depth precision at ~250 m
+            c.camera.near = 1.0 if g_ortho.value else 0.01
+            c.camera.far = real_dist * 4 + 1000.0
             c.camera.position = look + offset
             c.camera.look_at = look
 
@@ -207,6 +230,7 @@ def main():
             if orb is None:
                 return
             az, el, dist = orb
+            dist = dist / dist_scale()
             if np.allclose((az, el, dist), (g_az.value, g_el.value, g_dist.value), atol=1e-2):
                 return
             g_az.value = float(np.clip(az, g_az.min, g_az.max))
@@ -300,6 +324,7 @@ def main():
 
     for h in (g_show, g_joints, g_bones, g_lock, g_joint, g_follow_y):
         h.on_update(lambda _: show_frame(state["frame"]))
+    g_ortho.on_update(lambda _: push_camera())
     for h in (g_az, g_el, g_dist, g_fov):
         # only when the user drags the slider (programmatic sets have no client)
         h.on_update(lambda e: e.client is not None and push_camera())
@@ -325,7 +350,7 @@ def main():
         c = client.camera
         cam_pos, cam_wxyz, cam_fov = np.array(c.position), np.array(c.wxyz), float(c.fov)
         meta = {"schedule": asdict(schedule()), "gen": asdict(params()),
-                "camera": {**asdict(cam()), "track": g_lock.value,
+                "camera": {**asdict(cam()), "track": g_lock.value, "orthographic": g_ortho.value,
                            "follow_height": g_follow_y.value, "position": cam_pos.tolist(),
                            "wxyz": cam_wxyz.tolist(), "fov_rad": cam_fov},
                 "decode": g_decode.value, "show": g_show.value, "overlay_t0": g_final.value, "joints": g_joints.value, "bones": g_bones.value, "joint_size": g_jsize.value, "bone_width": g_bthick.value, "grid": g_grid.value, "background": list(g_bg.value)}
