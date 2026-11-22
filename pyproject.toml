@@ -1,0 +1,29 @@
+[project]
+name = "vdc-diffusion"
+version = "0.1.0"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+  "torch>=2.4",
+  "numpy",
+  "scipy",
+  "pyyaml",
+  "tqdm",
+  "matplotlib",
+  "imageio",
+  "viser",
+  "gdown",
+  "imageio-ffmpeg>=0.8.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+extraPaths = ["src", "third_party/AMDM"]
+
+[dependency-groups]
+dev = [
+    "playwright>=1.65.2",
+]
