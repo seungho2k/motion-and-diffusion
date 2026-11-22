@@ -78,8 +78,8 @@ def main():
         g_jsize = server.gui.add_slider("joint size", 0.005, 0.2, 0.005, 0.04)
         g_joints = server.gui.add_checkbox("joints", True)
         g_reduced = server.gui.add_checkbox(
-            "reduced joints", True,
-            hint="Hide circles on Spine, Spine1, LeftShoulder, RightShoulder (bones unchanged).")
+            "reduced skeleton", True,
+            hint="Drop Spine, Spine1 and both shoulders: torso bone Hips-Spine2, arms attach at Neck.")
         g_bones = server.gui.add_checkbox("bones", True)
         g_bthick = server.gui.add_slider("bone width", 0.002, 0.05, 0.001, 0.008)
         g_grid = server.gui.add_checkbox("grid", True)
@@ -120,6 +120,18 @@ def main():
     HIDDEN_WHEN_REDUCED = ("Spine", "Spine1", "LeftShoulder", "RightShoulder")
     reduced_idx = np.array([i for i, n in enumerate(rt.joint_names) if n not in HIDDEN_WHEN_REDUCED])
 
+    def _links(pairs):
+        return np.array([[rt.joint_names.index(a), rt.joint_names.index(b)] for a, b in pairs])
+
+    # Reduced bones: drop every bone touching a hidden joint, then bridge the gaps:
+    # Hips-Spine2 (straight torso) and Neck-LeftArm / Neck-RightArm (arms hang from the neck).
+    reduced_links = np.concatenate([
+        np.array([l for l in rt.links
+                  if rt.joint_names[l[0]] not in HIDDEN_WHEN_REDUCED
+                  and rt.joint_names[l[1]] not in HIDDEN_WHEN_REDUCED]),
+        _links([("Hips", "Spine2"), ("Neck", "LeftArm"), ("Neck", "RightArm")]),
+    ])
+
     class Skel:
         """One skeleton = joint dots + bone dots in a fixed colour."""
         def __init__(self, name, color):
@@ -134,7 +146,8 @@ def main():
                 shown = pts[reduced_idx] if g_reduced.value else pts
                 self.joints.points = shown.astype(np.float32)
             if self.bones.visible:
-                self.bones.points = bone_dots(pts, g_bthick.value)
+                self.bones.points = bone_dots(pts, g_bthick.value,
+                                              reduced_links if g_reduced.value else rt.links)
 
         def style(self):
             self.joints.point_size = g_jsize.value
@@ -146,8 +159,8 @@ def main():
     skel_main = Skel("xt", WHITE)        # current t (white)
     skel_main_y = Skel("xt_y", YELLOW)   # current t when the t=0 overlay is on
 
-    def bone_dots(j: np.ndarray, width: float, max_pts: int = 20000) -> np.ndarray:
-        a, b = j[rt.links[:, 0]], j[rt.links[:, 1]]
+    def bone_dots(j: np.ndarray, width: float, links: np.ndarray, max_pts: int = 20000) -> np.ndarray:
+        a, b = j[links[:, 0]], j[links[:, 1]]
         lengths = np.linalg.norm(b - a, axis=1)
         step = max(width * 0.35, 1e-4)
         n = np.clip(np.ceil(lengths / step).astype(int) + 1, 2, None)
@@ -360,7 +373,7 @@ def main():
                 "camera": {**asdict(cam()), "track": g_lock.value, "orthographic": g_ortho.value,
                            "follow_height": g_follow_y.value, "position": cam_pos.tolist(),
                            "wxyz": cam_wxyz.tolist(), "fov_rad": cam_fov},
-                "decode": g_decode.value, "show": g_show.value, "overlay_t0": g_final.value, "joints": g_joints.value, "reduced_joints": g_reduced.value, "bones": g_bones.value, "joint_size": g_jsize.value, "bone_width": g_bthick.value, "grid": g_grid.value, "background": list(g_bg.value)}
+                "decode": g_decode.value, "show": g_show.value, "overlay_t0": g_final.value, "joints": g_joints.value, "reduced_skeleton": g_reduced.value, "bones": g_bones.value, "joint_size": g_jsize.value, "bone_width": g_bthick.value, "grid": g_grid.value, "background": list(g_bg.value)}
         with open(path.replace(".mp4", ".json"), "w") as f:
             json.dump(meta, f, indent=2)
         g_export.disabled = True
