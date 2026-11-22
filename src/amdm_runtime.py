@@ -37,12 +37,13 @@ class GenParams:
     num_frames: int = 300
     seed: int = 0
     init_frame: int = 100          # index into the sample bvh used as starting pose
-    feed: str = "xt"               # what is fed back as condition: "xt" | "x0" | "mix"
+    feed: str = "xt"               # fed back as condition: "xt" | "x0" | "mix" | "final"
     feed_mix: float = 0.5          # for feed == "mix": 0 -> xt, 1 -> x0
     noise_scale: float = 1.0       # multiplier on all injected noise
     noise_coherence: float = 0.0   # AR(1) correlation of noise across frames (0 = white)
     root_source: str = "display"   # root deltas integrated from: "display" | "x0" | "none"
     clip: float = 4.0              # clamp x0-prediction and fed-back condition (normalised units)
+    compute_final: bool = False    # also run each frame's chain on to t=0 (same noises) -> x_final
 
 
 DECODE_MODES = ("position", "rotation")
@@ -53,6 +54,7 @@ class GenResult:
     levels: np.ndarray             # [N] diffusion level used per frame
     feats_xt: np.ndarray           # [N, D] denormalised features of the (partially) noisy state
     feats_x0: np.ndarray           # [N, D] denormalised features of the model's x0 prediction
+    feats_final: np.ndarray | None # [N, D] same frame's chain continued to t=0 (if computed)
     root_xt: np.ndarray            # [N, 3] (dx, dz, dyaw) integrated for the xt skeleton
     root_x0: np.ndarray            # [N, 3] (dx, dz, dyaw) integrated for the x0 skeleton
     links: np.ndarray
@@ -60,6 +62,7 @@ class GenResult:
     decode_mode: str = ""
     joints_xt: np.ndarray | None = None   # [N, J, 3] world-space joints (filled by decode_result)
     joints_x0: np.ndarray | None = None
+    joints_final: np.ndarray | None = None
 
 
 class AMDMRuntime:
@@ -114,13 +117,15 @@ class AMDMRuntime:
 
     # -------------------------------------------------------------- sampling
     @torch.no_grad()
-    def denoise_to(self, cond: torch.Tensor, level: float, noises: torch.Tensor, clip: float = 4.0):
+    def denoise_to(self, cond: torch.Tensor, level: float, noises: torch.Tensor, clip: float = 4.0,
+                   final: bool = False):
         """Run the reverse chain for one frame, stopping at (fractional) `level`.
 
         cond:   [D] normalised condition frame
         noises: [T+1, D] noise for this frame; noises[T] is the initial x_T,
                 noises[t] (t<T) is added after denoising step t.
-        Returns (x_level, x0_hat) both [D] normalised.
+        Returns (x_level, x0_hat, x_final) [D] normalised; x_final is the chain
+        continued from level down to 0 with the same noises (None unless final).
         """
         level = float(np.clip(level, 0.0, self.T))
         k_lo = int(np.floor(level))
@@ -131,7 +136,9 @@ class AMDMRuntime:
         x = noises[self.T][None]
         states = {self.T: x}
         x0_hat = x  # before any step, "prediction" is undefined: use noise
-        for t in range(self.T - 1, k_lo - 1, -1):
+        x0_at_level = x0_hat
+        stop = 0 if final else k_lo
+        for t in range(self.T - 1, stop - 1, -1):
             ts = torch.full((1,), t, device=self.device, dtype=torch.long)
             te = self.diff.time_mlp(ts)
             eps = self.diff.model(c, x, te)
@@ -141,10 +148,13 @@ class AMDMRuntime:
             if t > 0:
                 x = x + self.diff.sigma[t] * noises[t][None]
             states[t] = x
+            if t == k_lo:
+                x0_at_level = x0_hat
         x_lo = states[k_lo]
         x_hi = states[k_hi]
         x_level = (1 - frac) * x_lo + frac * x_hi
-        return x_level[0], x0_hat[0]
+        x_final = states[0][0] if final else None
+        return x_level[0], x0_at_level[0], x_final
 
     @torch.no_grad()
     def generate(self, levels: np.ndarray, p: GenParams, decode_mode: str = "position") -> GenResult:
@@ -158,15 +168,21 @@ class AMDMRuntime:
 
         xt_seq = torch.zeros(N, self.D)
         x0_seq = torch.zeros(N, self.D)
+        fin_seq = torch.zeros(N, self.D)
+        want_final = p.compute_final or p.feed == "final"
         for i in range(N):
             if i > 0:
                 fresh = torch.randn(self.T + 1, self.D, generator=g)
                 noise_state = rho * noise_state + np.sqrt(1 - rho * rho) * fresh
             noises = (noise_state * p.noise_scale).to(self.device)
-            x_l, x0 = self.denoise_to(cond, levels[i], noises, p.clip)
+            x_l, x0, x_fin = self.denoise_to(cond, levels[i], noises, p.clip, final=want_final)
             xt_seq[i] = x_l.cpu()
             x0_seq[i] = x0.cpu()
-            if p.feed == "x0":
+            if x_fin is not None:
+                fin_seq[i] = x_fin.cpu()
+            if p.feed == "final":
+                cond = x_fin
+            elif p.feed == "x0":
                 cond = x0
             elif p.feed == "mix":
                 cond = (1 - p.feed_mix) * x_l + p.feed_mix * x0
@@ -176,6 +192,7 @@ class AMDMRuntime:
 
         xt_d = self.denorm(xt_seq.to(self.device)).cpu().numpy()
         x0_d = self.denorm(x0_seq.to(self.device)).cpu().numpy()
+        fin_d = self.denorm(fin_seq.to(self.device)).cpu().numpy() if want_final else None
         if p.root_source == "x0":
             root_xt = root_x0 = x0_d[:, :3]
         elif p.root_source == "none":
@@ -184,7 +201,7 @@ class AMDMRuntime:
             root_xt = root_x0 = xt_d[:, :3]
         res = GenResult(
             levels=np.asarray(levels, dtype=np.float32),
-            feats_xt=xt_d, feats_x0=x0_d, root_xt=root_xt, root_x0=root_x0,
+            feats_xt=xt_d, feats_x0=x0_d, feats_final=fin_d, root_xt=root_xt, root_x0=root_x0,
             links=self.links, joint_names=self.joint_names,
         )
         return self.decode_result(res, decode_mode)
@@ -194,6 +211,9 @@ class AMDMRuntime:
         if res.decode_mode != mode:
             res.joints_xt = self.decode(res.feats_xt, res.root_xt, mode)
             res.joints_x0 = self.decode(res.feats_x0, res.root_x0, mode)
+            # final shares the xt root path so the two skeletons overlay in place
+            res.joints_final = (None if res.feats_final is None
+                                else self.decode(res.feats_final, res.root_xt, mode))
             res.decode_mode = mode
         return res
 

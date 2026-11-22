@@ -22,7 +22,7 @@ import viser.uplot as uplot
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 from amdm_runtime import DECODE_MODES, AMDMRuntime, GenParams  # noqa: E402
-from camera import TrackCam, orbit_from, smooth_track  # noqa: E402
+from camera import TrackCam, orbit_from  # noqa: E402
 from schedule import DipSchedule  # noqa: E402
 
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
@@ -35,12 +35,11 @@ def main():
     server = viser.ViserServer(port=8080)
     server.gui.configure_theme(dark_mode=True)
     server.scene.set_up_direction("+y")
-    # Everything lives under /world. Tracking moves /world so the (smoothed) tracked
-    # joint sits at the origin, instead of moving the camera: scene updates then go
-    # out as one atomic batch per frame (no camera/scene tearing), and the user's
-    # orbit / zoom / pan are plain viewer controls around that point.
-    world = server.scene.add_frame("/world", show_axes=False)
-    grid = server.scene.add_grid("/world/grid", width=40, height=40, plane="xz", cell_size=0.5, section_size=2.0,
+    # Tracking is baked into the coordinates sent each frame: the tracked joint is
+    # subtracted from every point server-side, so it is exactly at the origin in
+    # the very same message that carries the new pose (no frame where pose and
+    # offset disagree). The camera stays put and looks at the origin.
+    grid = server.scene.add_grid("/grid", width=40, height=40, plane="xz", cell_size=0.5, section_size=2.0,
                                  cell_color=(40, 40, 40), section_color=(70, 70, 70), shadow_opacity=0.0)
 
     state = {"res": None, "frame": 0, "playing": True}
@@ -57,7 +56,7 @@ def main():
     with server.gui.add_folder("Generation"):
         g_seed = server.gui.add_number("seed", 0, step=1)
         g_init = server.gui.add_slider("init frame", 0, len(rt.sample_frames()) - 1, 1, 100)
-        g_feed = server.gui.add_dropdown("feed back", ("xt", "x0", "mix"), initial_value="xt")
+        g_feed = server.gui.add_dropdown("feed back", ("xt", "x0", "mix", "final"), initial_value="xt")
         g_mix = server.gui.add_slider("mix (0=xt,1=x0)", 0.0, 1.0, 0.05, 0.5)
         g_nscale = server.gui.add_slider("noise scale", 0.0, 2.0, 0.05, 1.0)
         g_ncoh = server.gui.add_slider("noise coherence", 0.0, 0.99, 0.01, 0.0)
@@ -71,6 +70,10 @@ def main():
             hint="position: joint-position channels (spheres scatter freely). "
                  "rotation: FK from 6D rotations (bone lengths kept, skeleton twists).")
         g_show = server.gui.add_dropdown("show", ("xt", "x0", "xt + x0 ghost"), initial_value="xt")
+        g_final = server.gui.add_checkbox(
+            "overlay t=0", False,
+            hint="Also run each frame's denoising to the end (same noise) and draw it in white; "
+                 "the current-t skeleton turns yellow. Slower to generate (~3x).")
         g_jsize = server.gui.add_slider("joint size", 0.005, 0.2, 0.005, 0.04)
         g_joints = server.gui.add_checkbox("joints", True)
         g_bones = server.gui.add_checkbox("bones", True)
@@ -81,10 +84,7 @@ def main():
         g_lock = server.gui.add_checkbox(
             "track joint", True,
             hint="Orbit / zoom / pan in the viewport freely; the view stays locked on the joint.")
-        g_joint = server.gui.add_dropdown("joint", tuple(rt.joint_names), initial_value="Hips")
-        g_smooth = server.gui.add_slider(
-            "smoothing (s)", 0.0, 2.0, 0.01, 0.25,
-            hint="Critically damped follow; time to catch up. 0 = rigid lock.")
+        g_joint = server.gui.add_dropdown("joint", tuple(rt.joint_names), initial_value="RightHand")
         g_follow_y = server.gui.add_checkbox("follow height", True)
         g_az = server.gui.add_slider("azimuth", -180.0, 180.0, 1.0, 30.0)
         g_el = server.gui.add_slider("elevation", -89.0, 89.0, 1.0, 10.0)
@@ -101,18 +101,38 @@ def main():
     # -------------------------------------------------------------- scene
     # Joints and bones are both screen-facing flat circles (point clouds: unlit, no
     # shadows, no anti-aliased edges). Bones are drawn as densely sampled circles so
-    # they share the joints' material and never show seams. x0 ghost in grey.
-    WHITE, GHOST = (255, 255, 255), (110, 110, 110)
+    # they share the joints' material and never show seams.
+    WHITE, GHOST, YELLOW = (255, 255, 255), (110, 110, 110), (255, 214, 0)
     zeros_j = np.zeros((rt.J, 3), np.float32)
 
     def add_dots(name, color, size):
         return server.scene.add_point_cloud(name, zeros_j, color, point_size=size,
                                             point_shape="circle", point_shading="flat", precision="float32")
 
-    joints_xt = add_dots("/world/xt/joints", WHITE, g_jsize.value)
-    joints_x0 = add_dots("/world/x0/joints", GHOST, g_jsize.value)
-    bones_xt = add_dots("/world/xt/bones", WHITE, g_bthick.value)
-    bones_x0 = add_dots("/world/x0/bones", GHOST, g_bthick.value)
+    class Skel:
+        """One skeleton = joint dots + bone dots in a fixed colour."""
+        def __init__(self, name, color):
+            self.joints = add_dots(f"/{name}/joints", color, g_jsize.value)
+            self.bones = add_dots(f"/{name}/bones", color, g_bthick.value)
+
+        def show(self, pts: np.ndarray | None):
+            on = pts is not None
+            self.joints.visible = on and g_joints.value
+            self.bones.visible = on and g_bones.value
+            if self.joints.visible:
+                self.joints.points = pts.astype(np.float32)
+            if self.bones.visible:
+                self.bones.points = bone_dots(pts, g_bthick.value)
+
+        def style(self):
+            self.joints.point_size = g_jsize.value
+            self.bones.point_size = g_bthick.value
+
+    # drawn later = on top when overlapping at equal depth
+    skel_final = Skel("final", WHITE)    # t=0 overlay
+    skel_ghost = Skel("x0", GHOST)       # x0-prediction ghost
+    skel_main = Skel("xt", WHITE)        # current t (white)
+    skel_main_y = Skel("xt_y", YELLOW)   # current t when the t=0 overlay is on
 
     def bone_dots(j: np.ndarray, width: float, max_pts: int = 20000) -> np.ndarray:
         a, b = j[rt.links[:, 0]], j[rt.links[:, 1]]
@@ -125,10 +145,8 @@ def main():
         return np.concatenate(pts).astype(np.float32)
 
     def apply_style(_=None):
-        for h in (joints_xt, joints_x0):
-            h.point_size = g_jsize.value
-        for h in (bones_xt, bones_x0):
-            h.point_size = g_bthick.value
+        for sk in (skel_final, skel_ghost, skel_main, skel_main_y):
+            sk.style()
         grid.visible = g_grid.value
         server.scene.set_background_image(np.full((4, 4, 3), g_bg.value, np.uint8))
         show_frame(state["frame"])
@@ -153,21 +171,14 @@ def main():
                         elevation=g_el.value, distance=g_dist.value, fov=g_fov.value)
 
     # ------------------------------------------------------------- tracking
-    track_cache = {"key": None, "traj": None}
-
-    def anchor_traj() -> np.ndarray | None:
-        """Smoothed tracked-joint trajectory [N,3] for the current result (cached)."""
-        res = state["res"]
-        if res is None:
-            return None
-        key = (id(res), res.decode_mode, g_show.value, g_joint.value, g_smooth.value, g_follow_y.value)
-        if track_cache["key"] != key:
-            seq = res.joints_x0 if g_show.value == "x0" else res.joints_xt
-            traj = smooth_track(seq[:, rt.joint_names.index(g_joint.value)], g_smooth.value, 1.0 / FPS)
-            if not g_follow_y.value:
-                traj[:, 1] = traj[0, 1]
-            track_cache.update(key=key, traj=traj)
-        return track_cache["traj"]
+    def anchor(res, i: int) -> np.ndarray:
+        """Tracked joint position for frame i (vertical frozen at frame 0 if not following height)."""
+        seq = res.joints_x0 if g_show.value == "x0" else res.joints_xt
+        j = rt.joint_names.index(g_joint.value)
+        a = seq[i, j].astype(np.float64).copy()
+        if not g_follow_y.value:
+            a[1] = seq[0, j, 1]
+        return a
 
     # ------------------------------------------------------------- camera
     # The camera is owned by the viewer: the server only sets it when the user
@@ -219,20 +230,15 @@ def main():
         mode = g_show.value
         main = res.joints_x0[i] if mode == "x0" else res.joints_xt[i]
         ghost_vis = mode == "xt + x0 ghost"
-        traj = anchor_traj() if g_lock.value else None
+        final_vis = g_final.value and res.joints_final is not None
+        a = anchor(res, i) if g_lock.value else np.zeros(3)
+        main = main - a
         with server.atomic():
-            world.position = -traj[i] if traj is not None else (0.0, 0.0, 0.0)
-            joints_xt.visible = g_joints.value
-            joints_xt.points = main.astype(np.float32)
-            joints_x0.visible = ghost_vis and g_joints.value
-            if joints_x0.visible:
-                joints_x0.points = res.joints_x0[i].astype(np.float32)
-            bones_xt.visible = g_bones.value
-            if g_bones.value:
-                bones_xt.points = bone_dots(main, g_bthick.value)
-            bones_x0.visible = g_bones.value and ghost_vis
-            if bones_x0.visible:
-                bones_x0.points = bone_dots(res.joints_x0[i], g_bthick.value)
+            grid.position = -a
+            skel_main.show(None if final_vis else main)
+            skel_main_y.show(main if final_vis else None)
+            skel_ghost.show(res.joints_x0[i] - a if ghost_vis else None)
+            skel_final.show(res.joints_final[i] - a if final_vis else None)
         g_info.content = f"frame **{i}** / {len(res.levels) - 1} &nbsp; τ = **{res.levels[i]:.2f}** / {T}"
 
     def schedule() -> DipSchedule:
@@ -242,7 +248,8 @@ def main():
     def params() -> GenParams:
         return GenParams(num_frames=int(g_frames.value), seed=int(g_seed.value), init_frame=int(g_init.value),
                          feed=g_feed.value, feed_mix=g_mix.value, noise_scale=g_nscale.value,
-                         noise_coherence=g_ncoh.value, root_source=g_root.value, clip=g_clip.value)
+                         noise_coherence=g_ncoh.value, root_source=g_root.value, clip=g_clip.value,
+                         compute_final=g_final.value)
 
     def update_plot(levels):
         x = np.arange(len(levels), dtype=np.float64)
@@ -282,7 +289,15 @@ def main():
         show_frame(state["frame"])
     g_decode.on_update(redecode)
 
-    for h in (g_show, g_joints, g_bones, g_lock, g_joint, g_smooth, g_follow_y):
+    def on_final(_):
+        res = state["res"]
+        if g_final.value and res is not None and res.joints_final is None:
+            regenerate()
+        else:
+            show_frame(state["frame"])
+    g_final.on_update(on_final)
+
+    for h in (g_show, g_joints, g_bones, g_lock, g_joint, g_follow_y):
         h.on_update(lambda _: show_frame(state["frame"]))
     for h in (g_az, g_el, g_dist, g_fov):
         # only when the user drags the slider (programmatic sets have no client)
@@ -309,25 +324,32 @@ def main():
         c = client.camera
         cam_pos, cam_wxyz, cam_fov = np.array(c.position), np.array(c.wxyz), float(c.fov)
         meta = {"schedule": asdict(schedule()), "gen": asdict(params()),
-                "camera": {**asdict(cam()), "track": g_lock.value, "smoothing_s": g_smooth.value,
+                "camera": {**asdict(cam()), "track": g_lock.value,
                            "follow_height": g_follow_y.value, "position": cam_pos.tolist(),
                            "wxyz": cam_wxyz.tolist(), "fov_rad": cam_fov},
-                "decode": g_decode.value, "show": g_show.value, "joints": g_joints.value, "bones": g_bones.value, "joint_size": g_jsize.value, "bone_width": g_bthick.value, "grid": g_grid.value, "background": list(g_bg.value)}
+                "decode": g_decode.value, "show": g_show.value, "overlay_t0": g_final.value, "joints": g_joints.value, "bones": g_bones.value, "joint_size": g_jsize.value, "bone_width": g_bthick.value, "grid": g_grid.value, "background": list(g_bg.value)}
         with open(path.replace(".mp4", ".json"), "w") as f:
             json.dump(meta, f, indent=2)
         g_export.disabled = True
         writer = imageio.get_writer(path, fps=FPS, codec="libx264", quality=8, macro_block_size=1)
-        n = len(res.levels)
-        for i in range(n):
-            show_frame(i)
-            img = client.get_render(VIDEO_H, VIDEO_W, position=cam_pos, wxyz=cam_wxyz,
-                                    fov=cam_fov, transport_format="png")
-            if img.shape[-1] == 4:
-                a = img[..., 3:4].astype(np.float32) / 255.0
-                img = img[..., :3] * a + np.asarray(g_bg.value, np.float32) * (1 - a)
-            writer.append_data(img[..., :3].astype(np.uint8))
-            if i % 30 == 0:
-                g_info.content = f"exporting {i}/{n} ..."
+        try:
+            n = len(res.levels)
+            for i in range(n):
+                show_frame(i)
+                img = client.get_render(VIDEO_H, VIDEO_W, position=cam_pos, wxyz=cam_wxyz,
+                                        fov=cam_fov, transport_format="png")
+                if img.shape[-1] == 4:
+                    a = img[..., 3:4].astype(np.float32) / 255.0
+                    img = img[..., :3] * a + np.asarray(g_bg.value, np.float32) * (1 - a)
+                writer.append_data(img[..., :3].astype(np.uint8))
+                if i % 30 == 0:
+                    g_info.content = f"exporting {i}/{n} ..."
+        except Exception as e:  # e.g. the browser tab closed mid-export
+            writer.close()
+            g_export.disabled = False
+            g_info.content = f"export failed: {e}"
+            print("export failed:", repr(e), flush=True)
+            return
         writer.close()
         g_export.disabled = False
         g_info.content = f"saved `{path}`"

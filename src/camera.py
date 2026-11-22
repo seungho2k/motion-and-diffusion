@@ -27,28 +27,6 @@ class TrackCam:
         return pos, look_at_wxyz(pos, target)
 
 
-def smooth_track(points: np.ndarray, smooth_time: float, dt: float) -> np.ndarray:
-    """Critically damped spring follow (SmoothDamp) of a trajectory [N,3].
-
-    smooth_time ~ seconds to catch up; 0 returns the input unchanged.
-    """
-    pts = np.asarray(points, dtype=np.float64)
-    if smooth_time <= 0 or len(pts) == 0:
-        return pts.copy()
-    omega = 2.0 / smooth_time
-    x = omega * dt
-    decay = 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x)
-    out = np.empty_like(pts)
-    cur, vel = pts[0].copy(), np.zeros(3)
-    for i, target in enumerate(pts):
-        change = cur - target
-        temp = (vel + omega * change) * dt
-        vel = (vel - omega * temp) * decay
-        cur = target + (change + temp) * decay
-        out[i] = cur
-    return out
-
-
 def orbit_from(position: np.ndarray, look_at: np.ndarray):
     """Inverse of TrackCam's offset: camera position/look_at -> (azimuth, elevation, distance)."""
     off = np.asarray(position, float) - np.asarray(look_at, float)

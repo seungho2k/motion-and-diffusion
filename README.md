@@ -24,14 +24,16 @@ Each frame is denoised only down to a level τ(f) (15 = pure noise, 0 = clean) a
 result is fed back as the condition for the next frame. The viewer exposes:
 
 - **Schedule τ(f)** — dip curve (high / low / center / width / sharpness)
-- **Generation** — seed, start pose, feed-back state (`xt` / `x0` / mix), noise scale & temporal coherence, root source, clip
+- **Generation** — seed, start pose, feed-back state (`xt` / `x0` / mix / `final`), noise scale & temporal coherence, root source, clip
 - **Display** — `joints from`: `position` (joint-position channels; spheres scatter freely) or
   `rotation` (FK from 6D local rotations; bone lengths kept, skeleton twists); xt / x0 / ghost.
   Joints and bones are flat, unlit white (#ffffff) screen-facing circles on a black background (no shadows);
+  `overlay t=0` also runs each frame's denoising to the end with the same noise and draws that skeleton in
+  white while the current-t skeleton turns yellow (generation ~3x slower while on);
   joints / bones can be hidden; joint size, bone width, grid and background colour are adjustable
-- **Camera** — tracking keeps the chosen joint at the view centre by moving the world (not the camera), so
-  each frame is a single atomic scene update. `smoothing (s)` applies a critically damped follow
-  (0 = rigid lock), `follow height` can freeze vertical tracking. Orbit / zoom / pan in the viewport work
+- **Camera** — tracking (default joint: RightHand) subtracts the tracked joint from every point before it
+  is sent, so that joint sits exactly at the view centre in the same update as the new pose; the camera
+  itself stays put. `follow height` can freeze vertical tracking. Orbit / zoom / pan in the viewport work
   normally and are mirrored into the azimuth / elevation / distance sliders; `reset view` restores defaults.
   Export renders from the viewer's current camera
 - **Playback** — `space` toggles play / pause
