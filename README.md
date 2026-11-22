@@ -30,7 +30,8 @@ result is fed back as the condition for the next frame. The viewer exposes:
   Joints and bones are flat, unlit white (#ffffff) screen-facing circles on a black background (no shadows);
   `overlay t=0` also runs each frame's denoising to the end with the same noise and draws that skeleton in
   white while the current-t skeleton turns yellow (generation ~3x slower while on);
-  joints / bones can be hidden; joint size, bone width, grid and background colour are adjustable
+  joints / bones can be hidden; `reduced joints` (default on) hides the circles on Spine, Spine1 and both
+  shoulders (bones unchanged); joint size, bone width, grid and background colour are adjustable
 - **Camera** — tracking (default joint: RightHand) subtracts the tracked joint from every point before it
   is sent, so that joint sits exactly at the view centre in the same update as the new pose; the camera
   itself stays put. `follow height` can freeze vertical tracking. Orbit / zoom / pan in the viewport work

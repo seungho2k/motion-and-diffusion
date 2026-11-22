@@ -77,6 +77,9 @@ def main():
                  "the current-t skeleton turns yellow. Slower to generate (~3x).")
         g_jsize = server.gui.add_slider("joint size", 0.005, 0.2, 0.005, 0.04)
         g_joints = server.gui.add_checkbox("joints", True)
+        g_reduced = server.gui.add_checkbox(
+            "reduced joints", True,
+            hint="Hide circles on Spine, Spine1, LeftShoulder, RightShoulder (bones unchanged).")
         g_bones = server.gui.add_checkbox("bones", True)
         g_bthick = server.gui.add_slider("bone width", 0.002, 0.05, 0.001, 0.008)
         g_grid = server.gui.add_checkbox("grid", True)
@@ -114,6 +117,9 @@ def main():
         return server.scene.add_point_cloud(name, zeros_j, color, point_size=size,
                                             point_shape="circle", point_shading="flat", precision="float32")
 
+    HIDDEN_WHEN_REDUCED = ("Spine", "Spine1", "LeftShoulder", "RightShoulder")
+    reduced_idx = np.array([i for i, n in enumerate(rt.joint_names) if n not in HIDDEN_WHEN_REDUCED])
+
     class Skel:
         """One skeleton = joint dots + bone dots in a fixed colour."""
         def __init__(self, name, color):
@@ -125,7 +131,8 @@ def main():
             self.joints.visible = on and g_joints.value
             self.bones.visible = on and g_bones.value
             if self.joints.visible:
-                self.joints.points = pts.astype(np.float32)
+                shown = pts[reduced_idx] if g_reduced.value else pts
+                self.joints.points = shown.astype(np.float32)
             if self.bones.visible:
                 self.bones.points = bone_dots(pts, g_bthick.value)
 
@@ -322,7 +329,7 @@ def main():
             show_frame(state["frame"])
     g_final.on_update(on_final)
 
-    for h in (g_show, g_joints, g_bones, g_lock, g_joint, g_follow_y):
+    for h in (g_show, g_joints, g_reduced, g_bones, g_lock, g_joint, g_follow_y):
         h.on_update(lambda _: show_frame(state["frame"]))
     g_ortho.on_update(lambda _: push_camera())
     for h in (g_az, g_el, g_dist, g_fov):
@@ -353,7 +360,7 @@ def main():
                 "camera": {**asdict(cam()), "track": g_lock.value, "orthographic": g_ortho.value,
                            "follow_height": g_follow_y.value, "position": cam_pos.tolist(),
                            "wxyz": cam_wxyz.tolist(), "fov_rad": cam_fov},
-                "decode": g_decode.value, "show": g_show.value, "overlay_t0": g_final.value, "joints": g_joints.value, "bones": g_bones.value, "joint_size": g_jsize.value, "bone_width": g_bthick.value, "grid": g_grid.value, "background": list(g_bg.value)}
+                "decode": g_decode.value, "show": g_show.value, "overlay_t0": g_final.value, "joints": g_joints.value, "reduced_joints": g_reduced.value, "bones": g_bones.value, "joint_size": g_jsize.value, "bone_width": g_bthick.value, "grid": g_grid.value, "background": list(g_bg.value)}
         with open(path.replace(".mp4", ".json"), "w") as f:
             json.dump(meta, f, indent=2)
         g_export.disabled = True
