@@ -40,7 +40,8 @@ def main():
     # the very same message that carries the new pose (no frame where pose and
     # offset disagree). The camera stays put and looks at the origin.
     grid = server.scene.add_grid("/grid", width=40, height=40, plane="xz", cell_size=0.5, section_size=2.0,
-                                 cell_color=(40, 40, 40), section_color=(70, 70, 70), shadow_opacity=0.0)
+                                 cell_color=(40, 40, 40), section_color=(70, 70, 70), shadow_opacity=0.0,
+                                 infinite_grid=True, fade_distance=200.0)
 
     state = {"res": None, "frame": 0, "playing": True}
     lock = threading.Lock()
