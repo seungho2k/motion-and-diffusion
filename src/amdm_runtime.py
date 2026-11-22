@@ -34,7 +34,7 @@ SAMPLE_BVH = os.path.join(AMDM_DIR, "data/LAFAN1/aiming1_subject4.bvh")
 
 @dataclass
 class GenParams:
-    num_frames: int = 300
+    num_frames: int = 900
     seed: int = 0
     init_frame: int = 100          # index into the sample bvh used as starting pose
     feed: str = "xt"               # fed back as condition: "xt" | "x0" | "mix" | "final"

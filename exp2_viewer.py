@@ -48,11 +48,11 @@ def main():
 
     # ------------------------------------------------------------------ GUI
     with server.gui.add_folder("Schedule  τ(f)"):
-        g_frames = server.gui.add_slider("frames", 60, 900, 30, 300)
+        g_frames = server.gui.add_slider("frames", 60, 900, 30, 900)
         g_high = server.gui.add_slider("τ high", 0.0, float(T), 0.1, float(T))
         g_low = server.gui.add_slider("τ low", 0.0, float(T), 0.1, 0.0)
         g_center = server.gui.add_slider("center", 0.0, 1.0, 0.01, 0.5)
-        g_width = server.gui.add_slider("half width (fr)", 2.0, 300.0, 1.0, 45.0)
+        g_width = server.gui.add_slider("half width (fr)", 2.0, 900.0, 1.0, 600.0)
         g_sharp = server.gui.add_slider("sharpness", 0.5, 12.0, 0.1, 2.0)
     with server.gui.add_folder("Generation"):
         g_seed = server.gui.add_number("seed", 0, step=1)
@@ -98,7 +98,7 @@ def main():
         g_reset = server.gui.add_button("reset view")
     with server.gui.add_folder("Playback"):
         g_play = server.gui.add_checkbox("playing", True, hint="space: play / pause")
-        g_frame = server.gui.add_slider("frame", 0, 299, 1, 0)
+        g_frame = server.gui.add_slider("frame", 0, 899, 1, 0)
         g_info = server.gui.add_markdown("")
         g_export = server.gui.add_button("Export MP4 (1080x1350)", color="green")
     plot_holder = {"h": None}

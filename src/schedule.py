@@ -16,7 +16,7 @@ class DipSchedule:
     high: float = 15.0        # level outside the window (T = pure noise)
     low: float = 0.0          # level at the bottom of the dip (0 = clean)
     center: float = 0.5       # window centre as a fraction of the clip
-    half_width: float = 45.0  # frames
+    half_width: float = 600.0 # frames
     sharpness: float = 2.0    # 2 = gaussian, larger = flatter top, steeper edges
 
     def levels(self, num_frames: int) -> np.ndarray:
