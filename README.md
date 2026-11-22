@@ -29,9 +29,11 @@ result is fed back as the condition for the next frame. The viewer exposes:
   `rotation` (FK from 6D local rotations; bone lengths kept, skeleton twists); xt / x0 / ghost.
   Joints and bones are flat, unlit white (#ffffff) screen-facing circles on a black background (no shadows);
   joints / bones can be hidden; joint size, bone width, grid and background colour are adjustable
-- **Camera** — tracks one joint at fixed azimuth / elevation / distance / fov (no smoothing).
-  Orbiting / zooming in the viewport while tracking updates those values, so the new angle sticks;
-  `reset view` restores the defaults
+- **Camera** — tracking keeps the chosen joint at the view centre by moving the world (not the camera), so
+  each frame is a single atomic scene update. `smoothing (s)` applies a critically damped follow
+  (0 = rigid lock), `follow height` can freeze vertical tracking. Orbit / zoom / pan in the viewport work
+  normally and are mirrored into the azimuth / elevation / distance sliders; `reset view` restores defaults.
+  Export renders from the viewer's current camera
 - **Playback** — `space` toggles play / pause
 - **Export MP4** — renders 1080×1350 @ 30 fps into `outputs/` with a JSON of all parameters
 
