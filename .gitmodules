@@ -1,3 +1,6 @@
 [submodule "third_party/AMDM"]
 	path = third_party/AMDM
 	url = https://github.com/Yi-Shi94/AMDM
+[submodule "third_party/CLoSD"]
+	path = third_party/CLoSD
+	url = https://github.com/GuyTevet/CLoSD

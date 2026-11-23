@@ -22,6 +22,24 @@ mkdir -p data/lafan1 && curl -L -o /tmp/lafan1.zip \
   && unzip -o /tmp/lafan1.zip -d data/lafan1
 ```
 
+## Experiment 5 — text timeline with DiP (+ pulses / ramp / dip)
+
+```bash
+uv run python exp5_dip.py        # open http://localhost:8080
+```
+
+Uses **DiP**, the autoregressive text-to-motion diffusion planner from [CLoSD](https://github.com/GuyTevet/CLoSD)
+(submodule `third_party/CLoSD`; only the planner is used, no simulator). DistilBERT text encoder, 10 diffusion
+steps, 20-frame prefix → 40-frame plan, HumanML3D features (22 SMPL joints, 20 fps; resampled to 30 fps).
+Assets are fetched one by one from the `guytevet/CLoSD` Hugging Face repo on first run (~250 MB, not the 19 GB
+snapshot); `src/shims/clip` stands in for openai-clip, which this BERT checkpoint never calls.
+
+- **Text timeline** — one line per segment, `seconds: prompt`; total length; text guidance (CFG)
+- **Schedule** — same pulses / ramp / dip as experiment 2 (τ range 0–10), pulse frames in 30 fps video frames
+- **Generation** — `commit frames`: frames kept from each 40-frame plan before replanning (receding horizon,
+  so a schedule can change every few frames); feed back `xt` / `x0` / `final`; root from display / final
+- Display, camera, overlay t=0, export, saved panel state as in the other viewers
+
 ## Experiment 3 — two dancers and a gravity between their joints
 
 ```bash
@@ -97,6 +115,11 @@ src/gravity.py        two-dancer generation with joint-to-joint gravity guidance
 src/viewer_common.py  shared viser pieces (camera rig, space key, dot drawing, curve plot)
 bvh_viewer.py         viser BVH playback (port 8081)
 src/bvh_simple.py     minimal BVH reader + forward kinematics
+exp5_dip.py           viser app for experiment 5 (DiP)
+src/dip_runtime.py    DiP loader / planner without the CLoSD stack
+src/dip_gen.py        text-timeline generation with receding-horizon tau schedules
+src/shims/clip        placeholder for openai-clip
+third_party/CLoSD     CLoSD (submodule)
 src/camera.py         joint-tracking camera
 scripts/setup.sh      environment + checkpoint setup
 third_party/AMDM      A-MDM (submodule)
