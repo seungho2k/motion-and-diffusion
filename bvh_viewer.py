@@ -43,6 +43,23 @@ def main():
     labels = {label(f): f for f in files}
     e2_first = sorted(labels, key=lambda k: (not k.startswith("E2/"), k))
 
+    # joint names across all files (header only), for the track dropdown
+    def header_joints(f):
+        out = []
+        with open(f) as fh:
+            for line in fh:
+                t = line.split()
+                if t and t[0] in ("ROOT", "JOINT"):
+                    out.append(t[1])
+                elif t and t[0] == "MOTION":
+                    break
+        return out
+    all_joints = []
+    for f in files:
+        for n in header_joints(f):
+            if n not in all_joints:
+                all_joints.append(n)
+
     server = viser.ViserServer(port=args.port)
     grid = setup_scene(server)
     state = {"clip": None, "t": 0.0, "playing": True, "loading": False}
@@ -66,7 +83,9 @@ def main():
         g_grid = server.gui.add_checkbox("grid", True)
         g_bg = server.gui.add_rgb("background", (0, 0, 0))
     with server.gui.add_folder("Camera"):
-        g_track = server.gui.add_checkbox("track hips", True)
+        g_track = server.gui.add_dropdown(
+            "track", ("off",) + tuple(all_joints), initial_value="Hips" if "Hips" in all_joints else "off",
+            hint="Joint kept at the view centre (falls back to the root if this clip lacks it).")
         g_follow_y = server.gui.add_checkbox("follow height", False)
         cam = CameraRig(server, dist=4.0)
     add_space_toggle(server)
@@ -97,7 +116,7 @@ def main():
                 scale = 0.01 if np.abs(b.positions[..., 1]).max() > 20 else 1.0   # cm -> m
                 b.positions = (b.positions * scale).astype(np.float32)
                 state["clip"] = b
-                state["hip_med"] = float(np.median(b.positions[:, 0, 1]))
+                state["y_med"] = np.median(b.positions[:, :, 1], axis=0)   # per-joint typical height
                 state["t"] = 0.0
                 dur = len(b.positions) / b.fps
                 g_time.max = max(dur, 0.01)
@@ -129,10 +148,11 @@ def main():
         i = int(np.clip(round(t * b.fps), 0, n - 1))
         P = b.positions[i]
         a = np.zeros(3, np.float32)
-        if g_track.value:
-            a = P[0].copy()
+        if g_track.value != "off":
+            j = b.names.index(g_track.value) if g_track.value in b.names else 0
+            a = P[j].copy()
             if not g_follow_y.value:
-                a[1] = state.get("hip_med", 0.9)   # look at the clip's typical hip height
+                a[1] = state["y_med"][j]   # look at this joint's typical height in the clip
         Q = P - a
         with server.atomic():
             grid.position = -a

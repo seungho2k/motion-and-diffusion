@@ -47,7 +47,7 @@ uv run python bvh_viewer.py      # open http://localhost:8081
 ```
 
 Plays any `.bvh` found under `.cache/e2_motionbank/` and `data/lafan1/` (or `--dir`), with speed, scrubbing,
-loop, root/hand trails, hips tracking and the same camera / display controls as the experiments. E2 samples
+loop, root/hand trails, tracking of any joint and the same camera / display controls as the experiments. E2 samples
 were pulled from the Zenodo archive with ranged requests (the 52 GB zip is almost all video).
 
 ## Experiment 2 — noise → human → noise
