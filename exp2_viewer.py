@@ -53,9 +53,11 @@ def main():
                                           hint="pulses: clean motion with short pulses back toward noise. "
                                                "ramp: clean, then tau grows to its maximum at the end. "
                                                "dip: noise with one recognition window.")
-        g_rstart = server.gui.add_slider("ramp start", 0.0, 0.99, 0.01, 0.3,
-                                         hint="Where tau starts to grow, as a fraction of the clip.")
-        g_rpeak = server.gui.add_slider("ramp end τ", 0.5, float(T), 0.5, float(T))
+        g_rfade = server.gui.add_slider("ramp in end", 0.0, 0.99, 0.01, 0.2,
+                                        hint="Opening: tau falls from its max to base by this fraction (0 = no opening).")
+        g_rstart = server.gui.add_slider("ramp out start", 0.0, 0.99, 0.01, 0.7,
+                                         hint="Ending: tau starts to grow back at this fraction of the clip.")
+        g_rpeak = server.gui.add_slider("ramp max τ", 0.5, float(T), 0.5, float(T))
         g_rcurve = server.gui.add_dropdown("ramp curve", ("linear", "ease in", "ease out", "ease in-out",
                                                           "exponential"), initial_value="ease in")
         g_rpower = server.gui.add_slider("ramp steepness", 0.2, 10.0, 0.1, 2.0,
@@ -329,7 +331,7 @@ def main():
 
     def schedule():
         if g_stype.value == "ramp":
-            return RampSchedule(start=g_rstart.value, peak=g_rpeak.value, base=g_rbase.value,
+            return RampSchedule(fade_in=g_rfade.value, start=g_rstart.value, peak=g_rpeak.value, base=g_rbase.value,
                                 curve=g_rcurve.value, power=g_rpower.value)
         if g_stype.value == "pulses":
             return PulseSchedule(frames=g_pframes.value, count=int(g_pcount.value), peak=g_ppeak.value,
@@ -341,7 +343,7 @@ def main():
         t = g_stype.value
         for h in (g_pframes, g_pcount, g_ppeak, g_pattack, g_pdecay, g_pbase):
             h.visible = t == "pulses"
-        for h in (g_rstart, g_rpeak, g_rcurve, g_rpower, g_rbase):
+        for h in (g_rfade, g_rstart, g_rpeak, g_rcurve, g_rpower, g_rbase):
             h.visible = t == "ramp"
         for h in (g_high, g_low, g_center, g_width, g_sharp):
             h.visible = t == "dip"
@@ -374,7 +376,7 @@ def main():
         show_frame(state["frame"])
 
     for h in (g_frames, g_stype, g_pframes, g_pcount, g_ppeak, g_pattack, g_pdecay, g_pbase, g_iclip,
-              g_rstart, g_rpeak, g_rcurve, g_rpower, g_rbase,
+              g_rfade, g_rstart, g_rpeak, g_rcurve, g_rpower, g_rbase,
               g_high, g_low, g_center, g_width, g_sharp, g_seed, g_init, g_feed, g_mix,
               g_nscale, g_ncoh, g_root, g_clip):
         h.on_update(lambda _: g_auto.value and regenerate())

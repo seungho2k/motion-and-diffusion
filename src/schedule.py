@@ -74,27 +74,24 @@ class PulseSchedule:
 
 @dataclass
 class RampSchedule:
-    """Clean at first, then tau grows until it reaches `peak` at the last frame.
-
-    `start` is where the growth begins (fraction of the clip). `curve` shapes the
-    growth u in [0, 1] -> [0, 1]:
+    """Noise -> clean -> noise: tau starts at `peak`, falls to `base` by `fade_in`
+    (fraction of the clip), stays clean, then from `start` grows back to `peak` at the
+    last frame. The fall-off is the time mirror of the growth. `fade_in` = 0 disables
+    the opening. `curve` shapes the growth u in [0, 1] -> [0, 1]:
       linear       u
       ease in      u^power          (slow start, fast end)
       ease out     1 - (1-u)^power  (fast start, settles toward the end)
       ease in-out  smooth S-curve with steepness `power`
       exponential  (e^{power u} - 1) / (e^{power} - 1)
     """
-    start: float = 0.3
+    fade_in: float = 0.2
+    start: float = 0.7
     peak: float = 15.0
     base: float = 0.0
     curve: str = "ease in"
     power: float = 2.0
 
-    def levels(self, num_frames: int) -> np.ndarray:
-        f = np.arange(num_frames, dtype=np.float64)
-        s = self.start * (num_frames - 1)
-        span = max(num_frames - 1 - s, 1e-6)
-        u = np.clip((f - s) / span, 0.0, 1.0)
+    def _shape(self, u: np.ndarray) -> np.ndarray:
         k = max(self.power, 1e-3)
         if self.curve == "ease in":
             g = u ** k
@@ -107,4 +104,14 @@ class RampSchedule:
             g = np.expm1(k * u) / np.expm1(k)
         else:
             g = u
+        return g
+
+    def levels(self, num_frames: int) -> np.ndarray:
+        f = np.arange(num_frames, dtype=np.float64)
+        last = num_frames - 1
+        s = self.start * last
+        g = self._shape(np.clip((f - s) / max(last - s, 1e-6), 0.0, 1.0))      # growth at the end
+        if self.fade_in > 0:
+            e = self.fade_in * last
+            g = np.maximum(g, self._shape(np.clip((e - f) / max(e, 1e-6), 0.0, 1.0)))  # mirrored opening
         return self.base + (self.peak - self.base) * g

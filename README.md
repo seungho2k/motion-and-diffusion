@@ -61,8 +61,9 @@ result is fed back as the condition for the next frame. The viewer exposes:
 
 - **Schedule τ(f)** — `pulses` (default): clean generation with short pulses back toward noise at given
   frames (`150, 420, 700`) or evenly spaced; each rises to `peak τ` over `attack` frames and smoothly falls
-  back over `decay` frames. `ramp`: clean until `ramp start` (fraction of the clip), then τ grows to
-  `ramp end τ` at the last frame along a curve (linear / ease in / ease out / ease in-out / exponential,
+  back over `decay` frames. `ramp`: τ starts at `ramp max τ`, falls to base by `ramp in end` (fraction of
+  the clip; 0 = no opening), stays clean, and from `ramp out start` grows back to the max at the last frame
+  (the opening mirrors the ending) along a curve (linear / ease in / ease out / ease in-out / exponential,
   `steepness`). `dip`: noise with one recognition window (high / low / center / width / sharpness)
 - **Start clip** — any LaFAN1 clip in `data/lafan1` (default `dance1_subject1`) and frame
 - **Generation** — seed, start pose, feed-back state (`xt` / `x0` / mix / `final`), noise scale & temporal coherence, root source, clip
