@@ -18,12 +18,12 @@ from dataclasses import asdict
 import imageio.v2 as imageio
 import numpy as np
 import viser
-import viser.uplot as uplot
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 from amdm_runtime import DECODE_MODES, AMDMRuntime, GenParams  # noqa: E402
 from camera import TrackCam, orbit_from  # noqa: E402
 from schedule import DipSchedule  # noqa: E402
+from viewer_common import CurvePlot  # noqa: E402
 
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
 VIDEO_W, VIDEO_H, FPS = 1080, 1350, 30
@@ -104,7 +104,7 @@ def main():
         g_frame = server.gui.add_slider("frame", 0, 899, 1, 0)
         g_info = server.gui.add_markdown("")
         g_export = server.gui.add_button("Export MP4 (1080x1350)", color="green")
-    plot_holder = {"h": None}
+    plot = CurvePlot(server, color=(59, 108, 255))
 
     # -------------------------------------------------------------- scene
     # Joints and bones are both screen-facing flat circles (point clouds: unlit, no
@@ -227,7 +227,7 @@ def main():
 
     def push_camera(force: bool = False):
         k = dist_scale()
-        real_dist = g_dist.value * k
+        real_dist = max(g_dist.value, 0.05) * k   # typing "0.5" passes through "0"
         offset, _ = TrackCam(azimuth=g_az.value, elevation=g_el.value,
                              distance=real_dist).pose(np.zeros((rt.J, 3)))
         for cid, c in server.get_clients().items():
@@ -236,8 +236,11 @@ def main():
             # near > ~1 hides viser's background image; 1.0 still gives mm depth precision at ~250 m
             c.camera.near = 1.0 if g_ortho.value else 0.01
             c.camera.far = real_dist * 4 + 1000.0
-            c.camera.position = look + offset
-            c.camera.look_at = look
+            try:
+                c.camera.position = look + offset
+                c.camera.look_at = look
+            except ValueError:   # transient degenerate pose
+                pass
 
     def on_client(client: viser.ClientHandle):
         cid = client.client_id
@@ -297,16 +300,7 @@ def main():
                          compute_final=g_final.value)
 
     def update_plot(levels):
-        x = np.arange(len(levels), dtype=np.float64)
-        data = (x, levels.astype(np.float64))
-        if plot_holder["h"] is not None:
-            plot_holder["h"].remove()
-        plot_holder["h"] = server.gui.add_uplot(
-            data=data,
-            series=(uplot.Series(label="frame"), uplot.Series(label="τ", stroke="#3b6cff", width=2)),
-            scales={"x": uplot.Scale(time=False, auto=True), "y": uplot.Scale(range=(0, float(T)))},
-            legend=uplot.Legend(show=False), aspect=2.0,
-        )
+        plot.set_values(levels, vmax=float(T))
 
     def regenerate(_=None):
         with lock:
@@ -412,6 +406,8 @@ def main():
             state["frame"] = (state["frame"] + 1) % len(state["res"].levels)
             show_frame(state["frame"])
             g_frame.value = state["frame"]
+            if state["frame"] % 6 == 0:
+                plot.set_cursor(state["frame"])
         time.sleep(max(0.0, 1.0 / FPS - (time.time() - t0)))
 
 

@@ -5,3 +5,4 @@ __pycache__/
 .DS_Store
 # rendered videos are large; keep them out of git
 outputs/
+data/
