@@ -170,3 +170,56 @@ class CurvePlot:
             cx = int(round(pad + self.cursor * (w - 2 * pad - 1) / (n - 1)))
             img[pad:h - pad, max(cx - 1, 0):cx + 1] = 200
         return img
+
+
+class PersistentGui:
+    """Saves GUI values to a JSON file on every change and restores them at start-up.
+
+    Call `restore()` right after creating the handles and before registering callbacks
+    that would react to the restored values.
+    """
+
+    def __init__(self, path: str, handles: dict):
+        import json as _json
+        import os as _os
+        self._json, self._os = _json, _os
+        self.path = path
+        self.handles = handles
+
+    def restore(self):
+        if not self._os.path.exists(self.path):
+            return
+        try:
+            saved = self._json.load(open(self.path))
+        except Exception:
+            return
+        for k, v in saved.items():
+            h = self.handles.get(k)
+            if h is None:
+                continue
+            try:
+                opts = getattr(h, "options", None)
+                if opts is not None and v not in opts:
+                    continue
+                h.value = tuple(v) if isinstance(v, list) else v
+            except Exception:
+                pass
+
+    def start_saving(self):
+        for h in self.handles.values():
+            h.on_update(lambda _: self.save())
+
+    def save(self):
+        data = {}
+        for k, h in self.handles.items():
+            v = h.value
+            data[k] = list(v) if isinstance(v, tuple) else v
+        self._os.makedirs(self._os.path.dirname(self.path), exist_ok=True)
+        tmp = self.path + ".tmp"
+        with open(tmp, "w") as f:
+            self._json.dump(data, f, indent=1)
+        self._os.replace(tmp, self.path)
+
+    def reset(self):
+        if self._os.path.exists(self.path):
+            self._os.remove(self.path)

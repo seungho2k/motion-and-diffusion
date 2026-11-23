@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src
 from amdm_runtime import DECODE_MODES, AMDMRuntime, GenParams  # noqa: E402
 from camera import TrackCam, orbit_from  # noqa: E402
 from schedule import DipSchedule  # noqa: E402
-from viewer_common import CurvePlot  # noqa: E402
+from viewer_common import CurvePlot, PersistentGui  # noqa: E402
 
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
 VIDEO_W, VIDEO_H, FPS = 1080, 1350, 30
@@ -105,6 +105,20 @@ def main():
         g_info = server.gui.add_markdown("")
         g_export = server.gui.add_button("Export MP4 (1080x1350)", color="green")
     plot = CurvePlot(server, color=(59, 108, 255))
+    with server.gui.add_folder("Panel"):
+        g_resetgui = server.gui.add_button("reset panel to defaults",
+                                           hint="Forget the saved panel state (restart to apply).")
+
+    # panel state is saved on every change and restored at start-up
+    persisted = {k: v for k, v in locals().items()
+                 if k.startswith("g_") and k not in ("g_frame", "g_play")
+                 and type(v).__name__ in ("GuiSliderHandle", "GuiCheckboxHandle", "GuiDropdownHandle",
+                                          "GuiNumberHandle", "GuiRgbHandle")}
+    pstate = PersistentGui(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache/gui_state/exp2.json"),
+                           persisted)
+    pstate.restore()
+    pstate.start_saving()
+    g_resetgui.on_click(lambda _: (pstate.reset(), setattr(g_info, "content", "saved panel state cleared; restart to apply")))
 
     # -------------------------------------------------------------- scene
     # Joints and bones are both screen-facing flat circles (point clouds: unlit, no

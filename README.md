@@ -35,7 +35,9 @@ pose stays plausible while the trajectory becomes impossible. Defaults: 1200 fra
 
 - **Dancers** — start clip / frame for A and B, separation, facing
 - **Gravity** — which joints pull (hands → partner, arms → partner, hands → head/chest, all ↔ all),
-  pulse strength / count / width, constant pull, softening, repulsion radius, guide stop step, root pull
+  pulse strength (≈ m/frame at 1 m) / count / width, constant pull, softening, repulsion radius,
+  `momentum` (an impulse keeps dragging), `body pull` (share applied as a rigid whole-body drag outside the
+  prior — the prior alone only lets limbs reach an arm's length), `lift off floor`, guide stop step
 - **Display / Camera / Playback / Export** — as in experiment 2; track the midpoint of the two Hips (default) or any joint of A / B
 
 ## Experiment 2 — noise → human → noise
@@ -64,6 +66,9 @@ result is fed back as the condition for the next frame. The viewer exposes:
   framing, since viser has no orthographic camera). Export renders from the viewer's current camera
 - **Playback** — `space` toggles play / pause
 - **Export MP4** — renders 1080×1350 @ 30 fps into `outputs/` with a JSON of all parameters
+
+Panel state of both viewers is saved on every change to `.cache/gui_state/exp{2,3}.json` and restored at
+start-up (`reset panel to defaults` forgets it).
 
 ## Layout
 

@@ -23,7 +23,7 @@ import viser
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 from amdm_runtime import AMDMRuntime  # noqa: E402
 from gravity import PAIR_PRESETS, GravityParams, PairGenerator  # noqa: E402
-from viewer_common import CameraRig, CurvePlot, add_dots, add_space_toggle, line_dots, setup_scene  # noqa: E402
+from viewer_common import CameraRig, CurvePlot, PersistentGui, add_dots, add_space_toggle, line_dots, setup_scene  # noqa: E402
 
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
 VIDEO_W, VIDEO_H, FPS = 1080, 1350, 30
@@ -58,7 +58,8 @@ def main():
         g_face = server.gui.add_checkbox("face each other", d.face_each_other)
     with server.gui.add_folder("Gravity"):
         g_preset = server.gui.add_dropdown("pull", tuple(PAIR_PRESETS), initial_value=d.preset)
-        g_strength = server.gui.add_slider("pulse strength", 0.0, 3.0, 0.01, 0.5)
+        g_strength = server.gui.add_slider("pulse strength", 0.0, 3.0, 0.01, d.strength,
+                                           hint="~metres per frame a joint is dragged at 1 m distance.")
         g_base = server.gui.add_slider("constant pull", 0.0, 1.0, 0.01, d.base)
         g_pulses = server.gui.add_slider("pulses", 0, 12, 1, d.pulses)
         g_pwidth = server.gui.add_slider("pulse width (fr)", 2.0, 200.0, 1.0, d.pulse_width)
@@ -68,8 +69,14 @@ def main():
             "guide stop step", 0, rt.T - 1, 1, 2,
             hint="Pull is applied for diffusion steps t >= this; the remaining steps are prior-only "
                  "(higher = more natural poses, weaker pull).")
-        g_rootpull = server.gui.add_slider("root pull", 0.0, 1.0, 0.05, d.root_pull,
-                                           hint="How much the pull may slide the whole body.")
+        g_momentum = server.gui.add_slider(
+            "momentum", 0.0, 0.98, 0.01, d.momentum,
+            hint="Pull accumulates into velocity: a pulse keeps dragging afterwards (decay per frame).")
+        g_bodypull = server.gui.add_slider(
+            "body pull", 0.0, 1.0, 0.05, d.body_pull,
+            hint="Share of the pull that drags the whole body rigidly (outside the prior). "
+                 "The rest reaches with the limbs through diffusion guidance.")
+        g_lift = server.gui.add_checkbox("lift off floor", d.lift)
         g_gen = server.gui.add_button("Generate", color="blue")
         g_auto = server.gui.add_checkbox("auto regenerate", False)
     with server.gui.add_folder("Display"):
@@ -94,7 +101,21 @@ def main():
         g_info = server.gui.add_markdown("")
         g_export = server.gui.add_button("Export MP4 (1080x1350)", color="green")
         plot = CurvePlot(server, color=(255, 214, 0))
+        g_resetgui = server.gui.add_button("reset panel to defaults",
+                                           hint="Forget the saved panel state (restart to apply).")
     add_space_toggle(server)
+
+    # panel state is saved on every change and restored at start-up
+    persisted = {k: v for k, v in locals().items()
+                 if k.startswith("g_") and k not in ("g_frame", "g_play")
+                 and type(v).__name__ in ("GuiSliderHandle", "GuiCheckboxHandle", "GuiDropdownHandle",
+                                          "GuiNumberHandle", "GuiRgbHandle")}
+    persisted.update(cam_az=cam.az, cam_el=cam.el, cam_dist=cam.dist, cam_fov=cam.fov, cam_ortho=cam.ortho)
+    pstate = PersistentGui(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache/gui_state/exp3.json"),
+                           persisted)
+    pstate.restore()
+    pstate.start_saving()
+    g_resetgui.on_click(lambda _: (pstate.reset(), setattr(g_info, "content", "saved panel state cleared; restart to apply")))
 
     # -------------------------------------------------------------- skeletons
     hide = [names.index(n) for n in HIDDEN_WHEN_REDUCED]
@@ -175,7 +196,8 @@ def main():
             separation=g_sep.value, face_each_other=g_face.value, preset=g_preset.value,
             strength=g_strength.value, base=g_base.value, pulses=int(g_pulses.value),
             pulse_width=g_pwidth.value, softening=g_soft.value, repulse_radius=g_repulse.value,
-            guide_stop=int(g_stop.value), root_pull=g_rootpull.value)
+            guide_stop=int(g_stop.value), momentum=g_momentum.value, body_pull=g_bodypull.value,
+            lift=g_lift.value)
 
     def update_plot(res):
         plot.set_values(res.gravity, vmax=max(1e-3, float(res.gravity.max())) * 1.1)
@@ -208,7 +230,8 @@ def main():
 
     g_gen.on_click(regenerate)
     for h in (g_frames, g_seed, g_clip_a, g_frame_a, g_clip_b, g_frame_b, g_sep, g_face, g_preset,
-              g_strength, g_base, g_pulses, g_pwidth, g_soft, g_repulse, g_stop, g_rootpull):
+              g_strength, g_base, g_pulses, g_pwidth, g_soft, g_repulse, g_stop, g_momentum, g_bodypull,
+              g_lift):
         h.on_update(lambda _: g_auto.value and regenerate())
 
     for h in (g_joints, g_reduced, g_bones, g_track, g_follow_y):
