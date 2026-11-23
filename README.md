@@ -40,6 +40,16 @@ pose stays plausible while the trajectory becomes impossible. Defaults: 1200 fra
   prior — the prior alone only lets limbs reach an arm's length), `lift off floor`, guide stop step
 - **Display / Camera / Playback / Export** — as in experiment 2; track the midpoint of the two Hips (default) or any joint of A / B
 
+## BVH playback (E2-Create Motion Bank samples, LaFAN1)
+
+```bash
+uv run python bvh_viewer.py      # open http://localhost:8081
+```
+
+Plays any `.bvh` found under `.cache/e2_motionbank/` and `data/lafan1/` (or `--dir`), with speed, scrubbing,
+loop, root/hand trails, hips tracking and the same camera / display controls as the experiments. E2 samples
+were pulled from the Zenodo archive with ranged requests (the 52 GB zip is almost all video).
+
 ## Experiment 2 — noise → human → noise
 
 ```bash
@@ -79,6 +89,8 @@ src/schedule.py       τ(f) schedules
 exp3_gravity.py       viser app for experiment 3
 src/gravity.py        two-dancer generation with joint-to-joint gravity guidance
 src/viewer_common.py  shared viser pieces (camera rig, space key, dot drawing, curve plot)
+bvh_viewer.py         viser BVH playback (port 8081)
+src/bvh_simple.py     minimal BVH reader + forward kinematics
 src/camera.py         joint-tracking camera
 scripts/setup.sh      environment + checkpoint setup
 third_party/AMDM      A-MDM (submodule)
