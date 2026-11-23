@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import torch
 
-from amdm_runtime import AMDMRuntime, _m6d_to_rotmat
+from amdm_runtime import AMDMRuntime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LAFAN_DIR = os.path.join(ROOT, "data/lafan1")
@@ -35,7 +35,7 @@ PAIR_PRESETS = {
 
 @dataclass
 class GravityParams:
-    num_frames: int = 600
+    num_frames: int = 1200
     seed: int = 0
     clip_a: str = "dance1_subject1"
     clip_b: str = "dance2_subject3"
@@ -47,7 +47,7 @@ class GravityParams:
     strength: float = 0.04           # peak pull (m per guided step at ~1 m distance)
     base: float = 0.0                # constant pull between pulses
     pulses: int = 3                  # number of pulls over the clip
-    pulse_width: float = 25.0        # frames (gaussian sigma)
+    pulse_width: float = 4.0         # frames (gaussian sigma)
     softening: float = 0.25          # m; caps the pull at short range
     repulse_radius: float = 0.18     # m; push apart closer than this (0 = off)
     guide_stop: int = 3              # pull applied for diffusion steps t >= guide_stop
@@ -59,7 +59,6 @@ class GravityParams:
 @dataclass
 class PairResult:
     joints: np.ndarray               # [2, N, J, 3] world joints (position channels)
-    hand_rot: np.ndarray             # [2, N, 2, 3, 3] world hand orientations (from rotation channels)
     gravity: np.ndarray              # [N] pull strength per frame
     links: np.ndarray
     joint_names: list = field(default_factory=list)
@@ -155,8 +154,6 @@ class PairGenerator:
 
         N = p.num_frames
         joints = np.zeros((2, N, self.J, 3), np.float32)
-        hand_rot = np.zeros((2, N, 2, 3, 3), np.float32)
-        hand_ids = [self.names.index(h) for h in HANDS]
         root_w = torch.ones(D)
         root_w[:3] = p.root_pull
         root_w[2] = 0.0                                  # never steer heading directly
@@ -177,11 +174,10 @@ class PairGenerator:
             phys = rt.denorm(x)
             world, yaw, root = self._world(phys, yaw, root)
             joints[:, i] = world.numpy()
-            hand_rot[:, i] = self._hand_rot(phys, yaw, hand_ids)
             cond = x
             if progress and i % 30 == 0:
                 progress(i, N)
-        return PairResult(joints, hand_rot, g_curve.astype(np.float32), rt.links, self.names)
+        return PairResult(joints, g_curve.astype(np.float32), rt.links, self.names)
 
     def _guide(self, x0, g, p, movers, sources, yaw, root, root_w):
         with torch.enable_grad():
@@ -193,24 +189,6 @@ class PairGenerator:
             (grad,) = torch.autograd.grad(loss, xp)
         delta_phys = -grad * root_w
         return (x0 + delta_phys / self.std_safe).clamp(-p.clip, p.clip)
-
-    def _hand_rot(self, phys: torch.Tensor, yaw: torch.Tensor, hand_ids) -> np.ndarray:
-        """World orientation of both hands from the rotation channels (FK), [2,2,3,3]."""
-        rt = self.rt
-        x = phys.numpy().astype(np.float64)
-        m6 = x[:, rt.ang_lo:rt.ang_hi].reshape(2, self.J, 6)
-        Rl = _m6d_to_rotmat(m6)
-        ori = np.zeros((2, self.J, 3, 3))
-        for j in range(self.J):
-            pj = rt.parents[j]
-            ori[:, j] = Rl[:, j] if pj < 0 else ori[:, pj] @ Rl[:, j]
-        out = np.zeros((2, 2, 3, 3))
-        for b in range(2):
-            c, s = np.cos(float(yaw[b])), np.sin(float(yaw[b]))
-            Ry = np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
-            for k, h in enumerate(hand_ids):
-                out[b, k] = Ry.T @ ori[b, h]      # p_w = p_l @ Ry  <=>  column form Ry^T
-        return out
 
     def _facing_correction(self, cond: torch.Tensor) -> torch.Tensor:
         """Local forward angle of each dancer's start frame (from the feet)."""

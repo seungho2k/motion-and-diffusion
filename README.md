@@ -31,15 +31,12 @@ uv run python exp3_gravity.py    # open http://localhost:8080
 Two independent A-MDM rollouts (LaFAN1 prior, started from dance clips) are coupled only by a softened
 inverse-square pull applied to the model's clean-frame prediction during denoising (`src/gravity.py`).
 Pulses of pull drag the bodies together; the last `guide stop step` diffusion steps run prior-only, so each
-pose stays plausible while the trajectory becomes impossible. Fingers (absent in LaFAN1) are procedural
-damped spring chains with a soft ballet-hand rest shape (`src/fingers.py`), lagging behind the wrist and
-pulled toward the partner too.
+pose stays plausible while the trajectory becomes impossible. Defaults: 1200 frames, pulse width 4 frames.
 
 - **Dancers** — start clip / frame for A and B, separation, facing
 - **Gravity** — which joints pull (hands → partner, arms → partner, hands → head/chest, all ↔ all),
   pulse strength / count / width, constant pull, softening, repulsion radius, guide stop step, root pull
-- **Fingers** — stiffness, damping, gravity on fingers, curl
-- **Display / Camera / Playback / Export** — as in experiment 2; track the pair centre or any joint of A / B
+- **Display / Camera / Playback / Export** — as in experiment 2; track the midpoint of the two Hips (default) or any joint of A / B
 
 ## Experiment 2 — noise → human → noise
 
@@ -76,7 +73,6 @@ src/amdm_runtime.py   model loading, partial denoising per frame, decoding (posi
 src/schedule.py       τ(f) schedules
 exp3_gravity.py       viser app for experiment 3
 src/gravity.py        two-dancer generation with joint-to-joint gravity guidance
-src/fingers.py        procedural spring fingers
 src/viewer_common.py  shared viser pieces (camera rig, space key, dot drawing, curve plot)
 src/camera.py         joint-tracking camera
 scripts/setup.sh      environment + checkpoint setup

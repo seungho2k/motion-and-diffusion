@@ -4,8 +4,7 @@
 
 Each dancer is an independent A-MDM rollout (LaFAN1 prior); the only coupling is a
 softened inverse-square pull applied to the model's clean-frame prediction during
-denoising (see src/gravity.py). Fingers are procedural spring chains (src/fingers.py)
-that follow through and are also pulled toward the partner.
+denoising (see src/gravity.py).
 """
 from __future__ import annotations
 
@@ -23,7 +22,6 @@ import viser
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 from amdm_runtime import AMDMRuntime  # noqa: E402
-from fingers import FingerParams, finger_links, simulate_fingers  # noqa: E402
 from gravity import PAIR_PRESETS, GravityParams, PairGenerator  # noqa: E402
 from viewer_common import CameraRig, CurvePlot, add_dots, add_space_toggle, line_dots, setup_scene  # noqa: E402
 
@@ -44,7 +42,7 @@ def main():
 
     server = viser.ViserServer(port=8080)
     grid = setup_scene(server)
-    state = {"res": None, "fingers": None, "frame": 0, "playing": True, "busy": False}
+    state = {"res": None, "frame": 0, "playing": True, "busy": False}
     lock = threading.Lock()
     d = GravityParams()
 
@@ -74,26 +72,20 @@ def main():
                                            hint="How much the pull may slide the whole body.")
         g_gen = server.gui.add_button("Generate", color="blue")
         g_auto = server.gui.add_checkbox("auto regenerate", False)
-    with server.gui.add_folder("Fingers"):
-        g_fshow = server.gui.add_checkbox("fingers", True)
-        g_fstiff = server.gui.add_slider("stiffness", 20.0, 1000.0, 10.0, FingerParams.stiffness)
-        g_fdamp = server.gui.add_slider("damping", 0.0, 0.5, 0.01, FingerParams.damping)
-        g_fgrav = server.gui.add_slider("gravity on fingers", 0.0, 5.0, 0.05, FingerParams.gravity_gain)
-        g_fcurl = server.gui.add_slider("curl", 0.0, 2.0, 0.05, FingerParams.curl)
     with server.gui.add_folder("Display"):
         g_joints = server.gui.add_checkbox("joints", True)
         g_reduced = server.gui.add_checkbox("reduced skeleton", True)
         g_bones = server.gui.add_checkbox("bones", True)
         g_jsize = server.gui.add_slider("joint size", 0.005, 0.2, 0.005, 0.04)
         g_bwidth = server.gui.add_slider("bone width", 0.002, 0.05, 0.001, 0.008)
-        g_fwidth = server.gui.add_slider("finger width", 0.001, 0.03, 0.001, 0.005)
         g_col_a = server.gui.add_rgb("color A", (255, 255, 255))
         g_col_b = server.gui.add_rgb("color B", (255, 255, 255))
         g_grid = server.gui.add_checkbox("grid", True)
         g_bg = server.gui.add_rgb("background", (0, 0, 0))
     with server.gui.add_folder("Camera"):
-        track_opts = ("pair center", "off") + tuple(f"A: {n}" for n in names) + tuple(f"B: {n}" for n in names)
-        g_track = server.gui.add_dropdown("track", track_opts, initial_value="pair center")
+        track_opts = ("hips midpoint", "off") + tuple(f"A: {n}" for n in names) + tuple(f"B: {n}" for n in names)
+        g_track = server.gui.add_dropdown("track", track_opts, initial_value="hips midpoint",
+                                          hint="hips midpoint: centre between the two dancers' Hips joints.")
         g_follow_y = server.gui.add_checkbox("follow height", False)
         cam = CameraRig(server, dist=5.0)
     with server.gui.add_folder("Playback"):
@@ -112,44 +104,26 @@ def main():
     body_links_full = np.asarray(rt.links)
     body_links_red = np.concatenate([
         np.array([l for l in body_links_full if l[0] not in hide and l[1] not in hide]), np.array(bridge)])
-    fl = finger_links()                                   # within [wrist + 20 points]
-    hand_idx = [names.index("LeftHand"), names.index("RightHand")]
-
-    def finger_link_set() -> np.ndarray:
-        out = []
-        for h in range(2):
-            base = J + h * 20
-            remap = lambda k: hand_idx[h] if k == 0 else base + k - 1
-            out += [(remap(a), remap(b)) for a, b in fl]
-        return np.array(out)
-    finger_lk = finger_link_set()
-    tips = np.array([J + h * 20 + f * 4 + 3 for h in range(2) for f in range(5)])
 
     class Dancer:
         def __init__(self, name):
             self.joints = add_dots(server, f"/{name}/joints", (255, 255, 255), g_jsize.value)
             self.bones = add_dots(server, f"/{name}/bones", (255, 255, 255), g_bwidth.value)
-            self.fingers = add_dots(server, f"/{name}/fingers", (255, 255, 255), g_fwidth.value)
 
         def style(self, color):
-            for h in (self.joints, self.bones, self.fingers):
+            for h in (self.joints, self.bones):
                 h.colors = np.asarray(color, np.uint8)[None]
             self.joints.point_size = g_jsize.value
             self.bones.point_size = g_bwidth.value
-            self.fingers.point_size = g_fwidth.value
 
-        def show(self, body: np.ndarray, fingers: np.ndarray | None):
-            pts = body if fingers is None else np.concatenate([body, fingers[:, 1:].reshape(-1, 3)])
+        def show(self, body: np.ndarray):
             self.joints.visible = g_joints.value
             if self.joints.visible:
                 self.joints.points = (body[keep] if g_reduced.value else body).astype(np.float32)
             self.bones.visible = g_bones.value
             if self.bones.visible:
-                self.bones.points = line_dots(pts, body_links_red if g_reduced.value else body_links_full,
+                self.bones.points = line_dots(body, body_links_red if g_reduced.value else body_links_full,
                                               g_bwidth.value)
-            self.fingers.visible = fingers is not None and g_fshow.value
-            if self.fingers.visible:
-                self.fingers.points = line_dots(pts, finger_lk, g_fwidth.value)
 
     dancers = [Dancer("A"), Dancer("B")]
 
@@ -166,7 +140,7 @@ def main():
         j = res.joints
         if opt == "off":
             return np.zeros(3)
-        if opt == "pair center":
+        if opt == "hips midpoint":
             a = 0.5 * (j[0, i, 0] + j[1, i, 0])
             y0 = 0.5 * (j[0, 0, 0, 1] + j[1, 0, 0, 1])
         else:
@@ -180,7 +154,7 @@ def main():
         return a
 
     def show_frame(i: int):
-        res, fing = state["res"], state["fingers"]
+        res = state["res"]
         if res is None:
             return
         n = res.joints.shape[1]
@@ -189,8 +163,7 @@ def main():
         with server.atomic():
             grid.position = -a
             for b in range(2):
-                f = None if fing is None else fing[b][i] - a
-                dancers[b].show(res.joints[b, i] - a, f)
+                dancers[b].show(res.joints[b, i] - a)
         g_info.content = f"frame **{i}** / {n - 1} &nbsp; pull = **{res.gravity[i]:.2f}**"
 
     # -------------------------------------------------------------- generate
@@ -203,20 +176,6 @@ def main():
             strength=g_strength.value, base=g_base.value, pulses=int(g_pulses.value),
             pulse_width=g_pwidth.value, softening=g_soft.value, repulse_radius=g_repulse.value,
             guide_stop=int(g_stop.value), root_pull=g_rootpull.value)
-
-    def fparams() -> FingerParams:
-        return FingerParams(stiffness=g_fstiff.value, damping=g_fdamp.value,
-                            gravity_gain=g_fgrav.value, curl=g_fcurl.value)
-
-    def compute_fingers():
-        res = state["res"]
-        if res is None:
-            return
-        out = []
-        for b in range(2):
-            out.append(simulate_fingers(res.joints[b][:, hand_idx], res.hand_rot[b], res.gravity,
-                                        res.joints[1 - b], fparams(), softening=g_soft.value))
-        state["fingers"] = out
 
     def update_plot(res):
         plot.set_values(res.gravity, vmax=max(1e-3, float(res.gravity.max())) * 1.1)
@@ -235,7 +194,6 @@ def main():
                     g_info, "content", f"generating {i}/{n} ..."))
                 with lock:
                     state["res"] = res
-                    compute_fingers()
                     g_frame.max = res.joints.shape[1] - 1
                 update_plot(res)
                 print(f"generated {p.num_frames} frames x2 in {time.time() - t0:.1f}s", flush=True)
@@ -253,15 +211,9 @@ def main():
               g_strength, g_base, g_pulses, g_pwidth, g_soft, g_repulse, g_stop, g_rootpull):
         h.on_update(lambda _: g_auto.value and regenerate())
 
-    def refinger(_=None):
-        with lock:
-            compute_fingers()
-        show_frame(state["frame"])
-    for h in (g_fstiff, g_fdamp, g_fgrav, g_fcurl):
-        h.on_update(refinger)
-    for h in (g_fshow, g_joints, g_reduced, g_bones, g_track, g_follow_y):
+    for h in (g_joints, g_reduced, g_bones, g_track, g_follow_y):
         h.on_update(lambda _: show_frame(state["frame"]))
-    for h in (g_jsize, g_bwidth, g_fwidth, g_col_a, g_col_b, g_grid, g_bg):
+    for h in (g_jsize, g_bwidth, g_col_a, g_col_b, g_grid, g_bg):
         h.on_update(apply_style)
 
     def on_frame(_):
@@ -281,11 +233,10 @@ def main():
         state["playing"] = False
         os.makedirs(OUT_DIR, exist_ok=True)
         path = os.path.join(OUT_DIR, f"exp3_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4")
-        meta = {"gravity": asdict(params()), "fingers": asdict(fparams()), "camera": cam.meta(client),
+        meta = {"gravity": asdict(params()), "camera": cam.meta(client),
                 "track": g_track.value, "follow_height": g_follow_y.value,
                 "display": {"joints": g_joints.value, "reduced": g_reduced.value, "bones": g_bones.value,
-                            "fingers": g_fshow.value, "joint_size": g_jsize.value, "bone_width": g_bwidth.value,
-                            "finger_width": g_fwidth.value, "color_a": list(g_col_a.value),
+                            "joint_size": g_jsize.value, "bone_width": g_bwidth.value, "color_a": list(g_col_a.value),
                             "color_b": list(g_col_b.value), "grid": g_grid.value, "background": list(g_bg.value)}}
         with open(path.replace(".mp4", ".json"), "w") as f:
             json.dump(meta, f, indent=2)
