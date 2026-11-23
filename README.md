@@ -32,13 +32,6 @@ result is fed back as the condition for the next frame. The viewer exposes:
   white while the current-t skeleton turns yellow (generation ~3x slower while on);
   joints / bones can be hidden; `reduced skeleton` (default on) drops Spine, Spine1 and both
   shoulders: one torso bone Hips–Spine2 and the arms attached at the Neck; joint size, bone width, grid and background colour are adjustable
-- **Mesh** — `render`: skeleton / mesh / mesh + skeleton. The body is the Quaternius *Universal Base
-  Characters* (CC0, male / female, `assets/characters/`), scaled to the LaFAN1 hip height and driven from
-  the 22 joint positions (`src/character.py`: framed pelvis / chest, aim-swing for limbs, rigid
-  fingers). `mesh stretch`: `proportional` (segments scale with joint distance / rest length — clean
-  poses keep the mesh's proportions, noise stretches it), `exact` (bones on the joints), `rigid`.
-  Materials: `flat` (single unshaded colour: the body is skinned on the CPU and its surface drawn as
-  dense unlit dots, because viser tone-maps every lit material), toon3, standard. With the t=0 overlay the current-t body is yellow
 - **Camera** — tracking (default joint: RightHand) subtracts the tracked joint from every point before it
   is sent, so that joint sits exactly at the view centre in the same update as the new pose; the camera
   itself stays put. `follow height` can freeze vertical tracking. Orbit / zoom / pan in the viewport work
@@ -55,8 +48,6 @@ exp2_viewer.py        viser app for experiment 2
 src/amdm_runtime.py   model loading, partial denoising per frame, decoding (position / rotation)
 src/schedule.py       τ(f) schedules
 src/camera.py         joint-tracking camera
-src/character.py      glTF skinned character loader + LaFAN1 -> UE-rig retargeting
-assets/characters     Quaternius Universal Base Characters (CC0) geometry
 scripts/setup.sh      environment + checkpoint setup
 third_party/AMDM      A-MDM (submodule)
 ```

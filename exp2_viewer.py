@@ -23,7 +23,6 @@ import viser.uplot as uplot
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 from amdm_runtime import DECODE_MODES, AMDMRuntime, GenParams  # noqa: E402
 from camera import TrackCam, orbit_from  # noqa: E402
-from character import Retargeter, SurfaceSampler, load_character  # noqa: E402
 from schedule import DipSchedule  # noqa: E402
 
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
@@ -76,18 +75,6 @@ def main():
             "overlay t=0", False,
             hint="Also run each frame's denoising to the end (same noise) and draw it in white; "
                  "the current-t skeleton turns yellow. Slower to generate (~3x).")
-        g_render = server.gui.add_dropdown("render", ("skeleton", "mesh", "mesh + skeleton"),
-                                           initial_value="mesh")
-        g_char = server.gui.add_dropdown("character", ("male", "female"), initial_value="male")
-        g_mat = server.gui.add_dropdown(
-            "mesh material", ("flat", "toon3", "standard"), initial_value="toon3",
-            hint="flat: single unshaded colour (surface drawn as dense unlit dots, exact colour). "
-                 "toon3 / standard: lit mesh.")
-        g_stretch = server.gui.add_dropdown(
-            "mesh stretch", ("proportional", "exact", "rigid"), initial_value="proportional",
-            hint="proportional: segments scale with joint distance / rest length (clean poses keep "
-                 "the mesh's proportions; noise stretches it). exact: bones sit on the joints. "
-                 "rigid: rest lengths, rotations only.")
         g_jsize = server.gui.add_slider("joint size", 0.005, 0.2, 0.005, 0.04)
         g_joints = server.gui.add_checkbox("joints", True)
         g_reduced = server.gui.add_checkbox(
@@ -152,7 +139,7 @@ def main():
             self.bones = add_dots(f"/{name}/bones", color, g_bthick.value)
 
         def show(self, pts: np.ndarray | None):
-            on = pts is not None and g_render.value != "mesh"
+            on = pts is not None
             self.joints.visible = on and g_joints.value
             self.bones.visible = on and g_bones.value
             if self.joints.visible:
@@ -165,76 +152,6 @@ def main():
         def style(self):
             self.joints.point_size = g_jsize.value
             self.bones.point_size = g_bthick.value
-
-    # ---------------------------------------------------------- skinned mesh
-    # Quaternius base character (CC0), scaled to the LaFAN1 hip height and driven
-    # from the 22 joint positions by character.Retargeter.
-    _ref = rt.decode(rt.ds.denorm_data(rt.sample_frames()[1000:1001]).copy(), mode="rotation")[0]
-    HIP_H = float(_ref[rt.joint_names.index("Hips"), 1])
-    char_cache: dict = {}
-    FLAT_SPACING = 0.008   # surface sample spacing (m) for the flat render; dots are ~2x this
-
-    def get_char(name):
-        if name not in char_cache:
-            ch = load_character(name, target_hip_height=HIP_H)
-            char_cache[name] = (ch, Retargeter(ch, rt.joint_names, rt.parents, rt.offsets),
-                                SurfaceSampler(ch, spacing=FLAT_SPACING))
-        return char_cache[name]
-
-    class SkinnedBody:
-        """One skinned mesh instance in a fixed colour; rebuilt when character / material change."""
-        def __init__(self, name, color):
-            self.name, self.color, self.handle, self.key = name, color, None, None
-            self.flat = None
-
-        def _ensure_flat(self):
-            if self.flat is None:
-                self.flat = server.scene.add_point_cloud(
-                    f"/{self.name}/flat", np.zeros((1, 3), np.float32), self.color,
-                    point_size=FLAT_SPACING * 2.8, point_shape="circle", point_shading="flat",
-                    precision="float16")
-
-        def _ensure(self):
-            key = (g_char.value, g_mat.value)
-            if self.handle is not None and self.key == key:
-                return
-            if self.handle is not None:
-                self.handle.remove()
-            ch, _, _ = get_char(g_char.value)
-            self.handle = server.scene.add_mesh_skinned(
-                f"/{self.name}/mesh", ch.vertices.astype(np.float32), ch.faces.astype(np.uint32),
-                bone_wxyzs=ch.rest_wxyz, bone_positions=ch.rest_p, skin_weights=ch.skin_weights,
-                color=self.color, material=g_mat.value, cast_shadow=False, receive_shadow=False)
-            self.key = key
-
-        def show(self, pose):
-            """pose: (wxyz [B,4], positions [B,3]) already shifted for tracking, or None."""
-            if pose is None or g_render.value == "skeleton":
-                if self.handle is not None:
-                    self.handle.visible = False
-                if self.flat is not None:
-                    self.flat.visible = False
-                return
-            wxyz, pos = pose
-            if g_mat.value == "flat":
-                if self.handle is not None:
-                    self.handle.visible = False
-                self._ensure_flat()
-                _, _, sampler = get_char(g_char.value)
-                self.flat.points = sampler.samples(wxyz, pos).astype(np.float32)
-                self.flat.visible = True
-                return
-            if self.flat is not None:
-                self.flat.visible = False
-            self._ensure()
-            self.handle.visible = True
-            for b, bone in enumerate(self.handle.bones):
-                bone.wxyz = wxyz[b]
-                bone.position = pos[b]
-
-    mesh_final = SkinnedBody("final", WHITE)
-    mesh_main = SkinnedBody("xt", WHITE)
-    mesh_main_y = SkinnedBody("xt_y", YELLOW)
 
     # drawn later = on top when overlapping at equal depth
     skel_final = Skel("final", WHITE)    # t=0 overlay
@@ -359,35 +276,14 @@ def main():
         main = res.joints_x0[i] if mode == "x0" else res.joints_xt[i]
         ghost_vis = mode == "xt + x0 ghost"
         final_vis = g_final.value and res.joints_final is not None
-        use_mesh = g_render.value != "skeleton"
-        if use_mesh:
-            _, rg, _ = get_char(g_char.value)
-            pose_main = rg.pose(main, stretch=g_stretch.value)
-            pose_final = rg.pose(res.joints_final[i], stretch=g_stretch.value) if final_vis else None
         a = anchor(res, i) if g_lock.value else np.zeros(3)
-        if use_mesh and g_lock.value:
-            # keep the *mesh's* tracked bone centred (its position differs slightly from
-            # the LaFAN joint in proportional / rigid stretch modes)
-            bone = rg.target_bone(rt.joint_names.index(g_joint.value))
-            y = a[1]
-            a = pose_main[1][bone].copy()
-            if not g_follow_y.value:
-                a[1] = y
         main = main - a
-        shift = lambda pose: None if pose is None else (pose[0], pose[1] - a)
         with server.atomic():
             grid.position = -a
             skel_main.show(None if final_vis else main)
             skel_main_y.show(main if final_vis else None)
             skel_ghost.show(res.joints_x0[i] - a if ghost_vis else None)
             skel_final.show(res.joints_final[i] - a if final_vis else None)
-            if use_mesh:
-                mesh_main.show(None if final_vis else shift(pose_main))
-                mesh_main_y.show(shift(pose_main) if final_vis else None)
-                mesh_final.show(shift(pose_final))
-            else:
-                for m in (mesh_main, mesh_main_y, mesh_final):
-                    m.show(None)
         g_info.content = f"frame **{i}** / {len(res.levels) - 1} &nbsp; τ = **{res.levels[i]:.2f}** / {T}"
 
     def schedule() -> DipSchedule:
@@ -446,7 +342,7 @@ def main():
             show_frame(state["frame"])
     g_final.on_update(on_final)
 
-    for h in (g_render, g_char, g_mat, g_stretch, g_show, g_joints, g_reduced, g_bones, g_lock, g_joint, g_follow_y):
+    for h in (g_show, g_joints, g_reduced, g_bones, g_lock, g_joint, g_follow_y):
         h.on_update(lambda _: show_frame(state["frame"]))
     g_ortho.on_update(lambda _: push_camera())
     for h in (g_az, g_el, g_dist, g_fov):
@@ -477,8 +373,7 @@ def main():
                 "camera": {**asdict(cam()), "track": g_lock.value, "orthographic": g_ortho.value,
                            "follow_height": g_follow_y.value, "position": cam_pos.tolist(),
                            "wxyz": cam_wxyz.tolist(), "fov_rad": cam_fov},
-                "decode": g_decode.value, "render": g_render.value, "character": g_char.value,
-                "mesh_material": g_mat.value, "mesh_stretch": g_stretch.value, "show": g_show.value, "overlay_t0": g_final.value, "joints": g_joints.value, "reduced_skeleton": g_reduced.value, "bones": g_bones.value, "joint_size": g_jsize.value, "bone_width": g_bthick.value, "grid": g_grid.value, "background": list(g_bg.value)}
+                "decode": g_decode.value, "show": g_show.value, "overlay_t0": g_final.value, "joints": g_joints.value, "reduced_skeleton": g_reduced.value, "bones": g_bones.value, "joint_size": g_jsize.value, "bone_width": g_bthick.value, "grid": g_grid.value, "background": list(g_bg.value)}
         with open(path.replace(".mp4", ".json"), "w") as f:
             json.dump(meta, f, indent=2)
         g_export.disabled = True
