@@ -70,3 +70,41 @@ class PulseSchedule:
             shape[down] = r * r * (3 - 2 * r)
             lv = np.maximum(lv, self.base + (self.peak - self.base) * shape)
         return lv
+
+
+@dataclass
+class RampSchedule:
+    """Clean at first, then tau grows until it reaches `peak` at the last frame.
+
+    `start` is where the growth begins (fraction of the clip). `curve` shapes the
+    growth u in [0, 1] -> [0, 1]:
+      linear       u
+      ease in      u^power          (slow start, fast end)
+      ease out     1 - (1-u)^power  (fast start, settles toward the end)
+      ease in-out  smooth S-curve with steepness `power`
+      exponential  (e^{power u} - 1) / (e^{power} - 1)
+    """
+    start: float = 0.3
+    peak: float = 15.0
+    base: float = 0.0
+    curve: str = "ease in"
+    power: float = 2.0
+
+    def levels(self, num_frames: int) -> np.ndarray:
+        f = np.arange(num_frames, dtype=np.float64)
+        s = self.start * (num_frames - 1)
+        span = max(num_frames - 1 - s, 1e-6)
+        u = np.clip((f - s) / span, 0.0, 1.0)
+        k = max(self.power, 1e-3)
+        if self.curve == "ease in":
+            g = u ** k
+        elif self.curve == "ease out":
+            g = 1 - (1 - u) ** k
+        elif self.curve == "ease in-out":
+            a, b = u ** k, (1 - u) ** k
+            g = a / np.maximum(a + b, 1e-12)
+        elif self.curve == "exponential":
+            g = np.expm1(k * u) / np.expm1(k)
+        else:
+            g = u
+        return self.base + (self.peak - self.base) * g

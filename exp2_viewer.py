@@ -22,7 +22,7 @@ import viser
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 from amdm_runtime import DECODE_MODES, AMDMRuntime, GenParams  # noqa: E402
 from camera import TrackCam, orbit_from  # noqa: E402
-from schedule import DipSchedule, PulseSchedule  # noqa: E402
+from schedule import DipSchedule, PulseSchedule, RampSchedule  # noqa: E402
 from viewer_common import CurvePlot, PersistentGui  # noqa: E402
 
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
@@ -49,9 +49,18 @@ def main():
     # ------------------------------------------------------------------ GUI
     with server.gui.add_folder("Schedule  τ(f)"):
         g_frames = server.gui.add_slider("frames", 60, 1800, 30, 900)
-        g_stype = server.gui.add_dropdown("type", ("pulses", "dip"), initial_value="pulses",
+        g_stype = server.gui.add_dropdown("type", ("pulses", "ramp", "dip"), initial_value="pulses",
                                           hint="pulses: clean motion with short pulses back toward noise. "
+                                               "ramp: clean, then tau grows to its maximum at the end. "
                                                "dip: noise with one recognition window.")
+        g_rstart = server.gui.add_slider("ramp start", 0.0, 0.99, 0.01, 0.3,
+                                         hint="Where tau starts to grow, as a fraction of the clip.")
+        g_rpeak = server.gui.add_slider("ramp end τ", 0.5, float(T), 0.5, float(T))
+        g_rcurve = server.gui.add_dropdown("ramp curve", ("linear", "ease in", "ease out", "ease in-out",
+                                                          "exponential"), initial_value="ease in")
+        g_rpower = server.gui.add_slider("ramp steepness", 0.2, 10.0, 0.1, 2.0,
+                                         hint="Power for ease curves / rate for exponential.")
+        g_rbase = server.gui.add_slider("ramp base τ", 0.0, float(T), 0.1, 0.0)
         g_pframes = server.gui.add_text("pulse frames", "",
                                         hint="Comma-separated start frames, e.g. 150, 420, 700. Empty = evenly spaced.")
         g_pcount = server.gui.add_slider("pulse count", 0, 20, 1, 3)
@@ -319,6 +328,9 @@ def main():
         g_info.content = f"frame **{i}** / {len(res.levels) - 1} &nbsp; τ = **{res.levels[i]:.2f}** / {T}"
 
     def schedule():
+        if g_stype.value == "ramp":
+            return RampSchedule(start=g_rstart.value, peak=g_rpeak.value, base=g_rbase.value,
+                                curve=g_rcurve.value, power=g_rpower.value)
         if g_stype.value == "pulses":
             return PulseSchedule(frames=g_pframes.value, count=int(g_pcount.value), peak=g_ppeak.value,
                                  attack=int(g_pattack.value), decay=int(g_pdecay.value), base=g_pbase.value)
@@ -326,11 +338,13 @@ def main():
                            half_width=g_width.value, sharpness=g_sharp.value)
 
     def sched_visibility(_=None):
-        pulses = g_stype.value == "pulses"
+        t = g_stype.value
         for h in (g_pframes, g_pcount, g_ppeak, g_pattack, g_pdecay, g_pbase):
-            h.visible = pulses
+            h.visible = t == "pulses"
+        for h in (g_rstart, g_rpeak, g_rcurve, g_rpower, g_rbase):
+            h.visible = t == "ramp"
         for h in (g_high, g_low, g_center, g_width, g_sharp):
-            h.visible = not pulses
+            h.visible = t == "dip"
         g_pcount.disabled = bool(g_pframes.value.strip())
     g_stype.on_update(sched_visibility)
     g_pframes.on_update(sched_visibility)
@@ -360,6 +374,7 @@ def main():
         show_frame(state["frame"])
 
     for h in (g_frames, g_stype, g_pframes, g_pcount, g_ppeak, g_pattack, g_pdecay, g_pbase, g_iclip,
+              g_rstart, g_rpeak, g_rcurve, g_rpower, g_rbase,
               g_high, g_low, g_center, g_width, g_sharp, g_seed, g_init, g_feed, g_mix,
               g_nscale, g_ncoh, g_root, g_clip):
         h.on_update(lambda _: g_auto.value and regenerate())
