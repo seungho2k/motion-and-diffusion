@@ -22,7 +22,7 @@ import viser
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 from amdm_runtime import DECODE_MODES, AMDMRuntime, GenParams  # noqa: E402
 from camera import TrackCam, orbit_from  # noqa: E402
-from schedule import DipSchedule  # noqa: E402
+from schedule import DipSchedule, PulseSchedule  # noqa: E402
 from viewer_common import CurvePlot, PersistentGui  # noqa: E402
 
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
@@ -48,7 +48,17 @@ def main():
 
     # ------------------------------------------------------------------ GUI
     with server.gui.add_folder("Schedule  τ(f)"):
-        g_frames = server.gui.add_slider("frames", 60, 900, 30, 900)
+        g_frames = server.gui.add_slider("frames", 60, 1800, 30, 900)
+        g_stype = server.gui.add_dropdown("type", ("pulses", "dip"), initial_value="pulses",
+                                          hint="pulses: clean motion with short pulses back toward noise. "
+                                               "dip: noise with one recognition window.")
+        g_pframes = server.gui.add_text("pulse frames", "",
+                                        hint="Comma-separated start frames, e.g. 150, 420, 700. Empty = evenly spaced.")
+        g_pcount = server.gui.add_slider("pulse count", 0, 20, 1, 3)
+        g_ppeak = server.gui.add_slider("pulse peak τ", 0.5, float(T), 0.5, 12.0)
+        g_pattack = server.gui.add_slider("pulse attack (fr)", 0, 20, 1, 2)
+        g_pdecay = server.gui.add_slider("pulse decay (fr)", 1, 90, 1, 6)
+        g_pbase = server.gui.add_slider("base τ", 0.0, float(T), 0.1, 0.0)
         g_high = server.gui.add_slider("τ high", 0.0, float(T), 0.1, float(T))
         g_low = server.gui.add_slider("τ low", 0.0, float(T), 0.1, 0.0)
         g_center = server.gui.add_slider("center", 0.0, 1.0, 0.01, 0.5)
@@ -56,7 +66,12 @@ def main():
         g_sharp = server.gui.add_slider("sharpness", 0.5, 12.0, 0.1, 2.0)
     with server.gui.add_folder("Generation"):
         g_seed = server.gui.add_number("seed", 0, step=1)
-        g_init = server.gui.add_slider("init frame", 0, len(rt.sample_frames()) - 1, 1, 100)
+        lafan_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data/lafan1")
+        lafan_clips = sorted(f[:-4] for f in os.listdir(lafan_dir) if f.endswith(".bvh")) if os.path.isdir(lafan_dir) else []
+        g_iclip = server.gui.add_dropdown(
+            "start clip", ("sample",) + tuple(lafan_clips),
+            initial_value="dance1_subject1" if "dance1_subject1" in lafan_clips else "sample")
+        g_init = server.gui.add_slider("init frame", 0, 7000, 1, 300)
         g_feed = server.gui.add_dropdown("feed back", ("xt", "x0", "mix", "final"), initial_value="xt")
         g_mix = server.gui.add_slider("mix (0=xt,1=x0)", 0.0, 1.0, 0.05, 0.5)
         g_nscale = server.gui.add_slider("noise scale", 0.0, 2.0, 0.05, 1.0)
@@ -113,7 +128,7 @@ def main():
     persisted = {k: v for k, v in locals().items()
                  if k.startswith("g_") and k not in ("g_frame", "g_play")
                  and type(v).__name__ in ("GuiSliderHandle", "GuiCheckboxHandle", "GuiDropdownHandle",
-                                          "GuiNumberHandle", "GuiRgbHandle")}
+                                          "GuiNumberHandle", "GuiRgbHandle", "GuiTextHandle")}
     pstate = PersistentGui(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache/gui_state/exp2.json"),
                            persisted)
     pstate.restore()
@@ -303,12 +318,27 @@ def main():
             skel_final.show(res.joints_final[i] - a if final_vis else None)
         g_info.content = f"frame **{i}** / {len(res.levels) - 1} &nbsp; τ = **{res.levels[i]:.2f}** / {T}"
 
-    def schedule() -> DipSchedule:
+    def schedule():
+        if g_stype.value == "pulses":
+            return PulseSchedule(frames=g_pframes.value, count=int(g_pcount.value), peak=g_ppeak.value,
+                                 attack=int(g_pattack.value), decay=int(g_pdecay.value), base=g_pbase.value)
         return DipSchedule(high=g_high.value, low=g_low.value, center=g_center.value,
                            half_width=g_width.value, sharpness=g_sharp.value)
 
+    def sched_visibility(_=None):
+        pulses = g_stype.value == "pulses"
+        for h in (g_pframes, g_pcount, g_ppeak, g_pattack, g_pdecay, g_pbase):
+            h.visible = pulses
+        for h in (g_high, g_low, g_center, g_width, g_sharp):
+            h.visible = not pulses
+        g_pcount.disabled = bool(g_pframes.value.strip())
+    g_stype.on_update(sched_visibility)
+    g_pframes.on_update(sched_visibility)
+    sched_visibility()
+
     def params() -> GenParams:
-        return GenParams(num_frames=int(g_frames.value), seed=int(g_seed.value), init_frame=int(g_init.value),
+        return GenParams(num_frames=int(g_frames.value), seed=int(g_seed.value),
+                         init_clip="" if g_iclip.value == "sample" else g_iclip.value, init_frame=int(g_init.value),
                          feed=g_feed.value, feed_mix=g_mix.value, noise_scale=g_nscale.value,
                          noise_coherence=g_ncoh.value, root_source=g_root.value, clip=g_clip.value,
                          compute_final=g_final.value)
@@ -329,7 +359,8 @@ def main():
             print(f"generated {len(levels)} frames in {time.time() - t0:.2f}s", flush=True)
         show_frame(state["frame"])
 
-    for h in (g_frames, g_high, g_low, g_center, g_width, g_sharp, g_seed, g_init, g_feed, g_mix,
+    for h in (g_frames, g_stype, g_pframes, g_pcount, g_ppeak, g_pattack, g_pdecay, g_pbase, g_iclip,
+              g_high, g_low, g_center, g_width, g_sharp, g_seed, g_init, g_feed, g_mix,
               g_nscale, g_ncoh, g_root, g_clip):
         h.on_update(lambda _: g_auto.value and regenerate())
     g_gen.on_click(regenerate)

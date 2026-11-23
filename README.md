@@ -50,7 +50,7 @@ Plays any `.bvh` found under `.cache/e2_motionbank/` and `data/lafan1/` (or `--d
 loop, root/hand trails, tracking of any joint and the same camera / display controls as the experiments. E2 samples
 were pulled from the Zenodo archive with ranged requests (the 52 GB zip is almost all video).
 
-## Experiment 2 — noise → human → noise
+## Experiment 2 — noise ↔ human (dip or pulses)
 
 ```bash
 uv run python exp2_viewer.py     # open http://localhost:8080
@@ -59,7 +59,10 @@ uv run python exp2_viewer.py     # open http://localhost:8080
 Each frame is denoised only down to a level τ(f) (15 = pure noise, 0 = clean) and the
 result is fed back as the condition for the next frame. The viewer exposes:
 
-- **Schedule τ(f)** — dip curve (high / low / center / width / sharpness)
+- **Schedule τ(f)** — `pulses` (default): clean generation with short pulses back toward noise at given
+  frames (`150, 420, 700`) or evenly spaced; each rises to `peak τ` over `attack` frames and smoothly falls
+  back over `decay` frames. `dip`: noise with one recognition window (high / low / center / width / sharpness)
+- **Start clip** — any LaFAN1 clip in `data/lafan1` (default `dance1_subject1`) and frame
 - **Generation** — seed, start pose, feed-back state (`xt` / `x0` / mix / `final`), noise scale & temporal coherence, root source, clip
 - **Display** — `joints from`: `position` (joint-position channels; spheres scatter freely) or
   `rotation` (FK from 6D local rotations; bone lengths kept, skeleton twists); xt / x0 / ghost.

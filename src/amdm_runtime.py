@@ -36,7 +36,8 @@ SAMPLE_BVH = os.path.join(AMDM_DIR, "data/LAFAN1/aiming1_subject4.bvh")
 class GenParams:
     num_frames: int = 900
     seed: int = 0
-    init_frame: int = 100          # index into the sample bvh used as starting pose
+    init_clip: str = ""            # LaFAN1 clip name in data/lafan1 ("" = bundled sample bvh)
+    init_frame: int = 100          # frame of that clip used as starting pose
     feed: str = "xt"               # fed back as condition: "xt" | "x0" | "mix" | "final"
     feed_mix: float = 0.5          # for feed == "mix": 0 -> xt, 1 -> x0
     noise_scale: float = 1.0       # multiplier on all injected noise
@@ -105,12 +106,22 @@ class AMDMRuntime:
         self.avg = torch.tensor(self.ds.avg, dtype=torch.float32, device=self.device)
 
         self._sample_frames = None
+        self._clip_frames: dict = {}
 
     # ------------------------------------------------------------------ data
     def sample_frames(self) -> np.ndarray:
         if self._sample_frames is None:
             self._sample_frames = self.ds.load_new_data(SAMPLE_BVH).astype(np.float32)
         return self._sample_frames
+
+    def clip_frames(self, name: str) -> np.ndarray:
+        """Normalised frames of a LaFAN1 clip in data/lafan1 (falls back to the bundled sample)."""
+        path = os.path.join(ROOT, "data/lafan1", name + ".bvh")
+        if not name or not os.path.exists(path):
+            return self.sample_frames()
+        if name not in self._clip_frames:
+            self._clip_frames[name] = self.ds.load_new_data(path).astype(np.float32)
+        return self._clip_frames[name]
 
     def denorm(self, x: torch.Tensor) -> torch.Tensor:
         return x * self.std + self.avg
@@ -160,7 +171,7 @@ class AMDMRuntime:
     def generate(self, levels: np.ndarray, p: GenParams, decode_mode: str = "position") -> GenResult:
         N = len(levels)
         g = torch.Generator(device="cpu").manual_seed(p.seed)
-        frames = self.sample_frames()
+        frames = self.clip_frames(p.init_clip)
         cond = torch.tensor(frames[p.init_frame % len(frames)], device=self.device)
 
         rho = float(np.clip(p.noise_coherence, 0.0, 0.999))
