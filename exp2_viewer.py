@@ -23,7 +23,7 @@ import viser.uplot as uplot
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 from amdm_runtime import DECODE_MODES, AMDMRuntime, GenParams  # noqa: E402
 from camera import TrackCam, orbit_from  # noqa: E402
-from character import Retargeter, load_character  # noqa: E402
+from character import Retargeter, SurfaceSampler, load_character  # noqa: E402
 from schedule import DipSchedule  # noqa: E402
 
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
@@ -79,7 +79,10 @@ def main():
         g_render = server.gui.add_dropdown("render", ("skeleton", "mesh", "mesh + skeleton"),
                                            initial_value="mesh")
         g_char = server.gui.add_dropdown("character", ("male", "female"), initial_value="male")
-        g_mat = server.gui.add_dropdown("mesh material", ("toon3", "toon5", "standard"), initial_value="toon3")
+        g_mat = server.gui.add_dropdown(
+            "mesh material", ("flat", "toon3", "standard"), initial_value="toon3",
+            hint="flat: single unshaded colour (surface drawn as dense unlit dots, exact colour). "
+                 "toon3 / standard: lit mesh.")
         g_stretch = server.gui.add_dropdown(
             "mesh stretch", ("proportional", "exact", "rigid"), initial_value="proportional",
             hint="proportional: segments scale with joint distance / rest length (clean poses keep "
@@ -169,17 +172,27 @@ def main():
     _ref = rt.decode(rt.ds.denorm_data(rt.sample_frames()[1000:1001]).copy(), mode="rotation")[0]
     HIP_H = float(_ref[rt.joint_names.index("Hips"), 1])
     char_cache: dict = {}
+    FLAT_SPACING = 0.008   # surface sample spacing (m) for the flat render; dots are ~2x this
 
     def get_char(name):
         if name not in char_cache:
             ch = load_character(name, target_hip_height=HIP_H)
-            char_cache[name] = (ch, Retargeter(ch, rt.joint_names, rt.parents, rt.offsets))
+            char_cache[name] = (ch, Retargeter(ch, rt.joint_names, rt.parents, rt.offsets),
+                                SurfaceSampler(ch, spacing=FLAT_SPACING))
         return char_cache[name]
 
     class SkinnedBody:
         """One skinned mesh instance in a fixed colour; rebuilt when character / material change."""
         def __init__(self, name, color):
             self.name, self.color, self.handle, self.key = name, color, None, None
+            self.flat = None
+
+        def _ensure_flat(self):
+            if self.flat is None:
+                self.flat = server.scene.add_point_cloud(
+                    f"/{self.name}/flat", np.zeros((1, 3), np.float32), self.color,
+                    point_size=FLAT_SPACING * 2.8, point_shape="circle", point_shading="flat",
+                    precision="float16")
 
         def _ensure(self):
             key = (g_char.value, g_mat.value)
@@ -187,7 +200,7 @@ def main():
                 return
             if self.handle is not None:
                 self.handle.remove()
-            ch, _ = get_char(g_char.value)
+            ch, _, _ = get_char(g_char.value)
             self.handle = server.scene.add_mesh_skinned(
                 f"/{self.name}/mesh", ch.vertices.astype(np.float32), ch.faces.astype(np.uint32),
                 bone_wxyzs=ch.rest_wxyz, bone_positions=ch.rest_p, skin_weights=ch.skin_weights,
@@ -199,9 +212,21 @@ def main():
             if pose is None or g_render.value == "skeleton":
                 if self.handle is not None:
                     self.handle.visible = False
+                if self.flat is not None:
+                    self.flat.visible = False
                 return
-            self._ensure()
             wxyz, pos = pose
+            if g_mat.value == "flat":
+                if self.handle is not None:
+                    self.handle.visible = False
+                self._ensure_flat()
+                _, _, sampler = get_char(g_char.value)
+                self.flat.points = sampler.samples(wxyz, pos).astype(np.float32)
+                self.flat.visible = True
+                return
+            if self.flat is not None:
+                self.flat.visible = False
+            self._ensure()
             self.handle.visible = True
             for b, bone in enumerate(self.handle.bones):
                 bone.wxyz = wxyz[b]
@@ -336,7 +361,7 @@ def main():
         final_vis = g_final.value and res.joints_final is not None
         use_mesh = g_render.value != "skeleton"
         if use_mesh:
-            _, rg = get_char(g_char.value)
+            _, rg, _ = get_char(g_char.value)
             pose_main = rg.pose(main, stretch=g_stretch.value)
             pose_final = rg.pose(res.joints_final[i], stretch=g_stretch.value) if final_vis else None
         a = anchor(res, i) if g_lock.value else np.zeros(3)

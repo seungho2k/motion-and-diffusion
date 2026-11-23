@@ -250,3 +250,49 @@ def _orthonormalize(M):
 def mat_to_wxyz(R: np.ndarray) -> np.ndarray:
     from camera import mat_to_wxyz as _m
     return _m(R)
+
+
+# --------------------------------------------------------------- flat silhouette
+def _quat_to_mat(q: np.ndarray) -> np.ndarray:
+    w, x, y, z = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
+    return np.stack([
+        np.stack([1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)], -1),
+        np.stack([2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)], -1),
+        np.stack([2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)], -1),
+    ], -2)
+
+
+class SurfaceSampler:
+    """Linear-blend-skins the character on the CPU and returns dense surface samples.
+
+    Used for the flat (single colour) render: drawn as unlit point-cloud circles,
+    which viser does not tone-map, so the silhouette is exactly the chosen colour.
+    """
+
+    def __init__(self, ch: Character, spacing: float = 0.008, seed: int = 0):
+        self.ch = ch
+        top = np.argsort(-ch.skin_weights, axis=1)[:, :4]
+        w = np.take_along_axis(ch.skin_weights, top, axis=1)
+        self.top, self.w = top, w / np.maximum(w.sum(1, keepdims=True), 1e-8)
+        tri = ch.vertices[ch.faces]
+        area = 0.5 * np.linalg.norm(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1)
+        n = np.maximum(1, np.round(area / spacing ** 2).astype(int))
+        rng = np.random.default_rng(seed)
+        self.face = np.repeat(np.arange(len(ch.faces)), n)
+        u, v = rng.random(len(self.face)), rng.random(len(self.face))
+        flip = u + v > 1
+        u[flip], v[flip] = 1 - u[flip], 1 - v[flip]
+        self.bary = np.stack([1 - u - v, u, v], 1)
+
+    def skin(self, wxyz: np.ndarray, pos: np.ndarray) -> np.ndarray:
+        ch = self.ch
+        A = _quat_to_mat(wxyz) @ ch.rest_R.transpose(0, 2, 1)           # [B,3,3]
+        t = pos - np.einsum("bij,bj->bi", A, ch.rest_p)                  # [B,3]
+        Av = np.einsum("vkij,vj->vki", A[self.top], ch.vertices)          # [V,4,3]
+        V = np.einsum("vk,vki->vi", self.w, Av + t[self.top])
+        return V
+
+    def samples(self, wxyz: np.ndarray, pos: np.ndarray) -> np.ndarray:
+        V = self.skin(wxyz, pos)
+        tri = V[self.ch.faces[self.face]]                                # [S,3,3]
+        return np.einsum("sk,ski->si", self.bary, tri)

@@ -37,7 +37,8 @@ result is fed back as the condition for the next frame. The viewer exposes:
   the 22 joint positions (`src/character.py`: framed pelvis / chest, aim-swing for limbs, rigid
   fingers). `mesh stretch`: `proportional` (segments scale with joint distance / rest length — clean
   poses keep the mesh's proportions, noise stretches it), `exact` (bones on the joints), `rigid`.
-  Materials: toon3 / toon5 / standard. With the t=0 overlay the current-t body is yellow
+  Materials: `flat` (single unshaded colour: the body is skinned on the CPU and its surface drawn as
+  dense unlit dots, because viser tone-maps every lit material), toon3, standard. With the t=0 overlay the current-t body is yellow
 - **Camera** — tracking (default joint: RightHand) subtracts the tracked joint from every point before it
   is sent, so that joint sits exactly at the view centre in the same update as the new pose; the camera
   itself stays put. `follow height` can freeze vertical tracking. Orbit / zoom / pan in the viewport work
