@@ -53,8 +53,7 @@ Pinned points (tracked joint, middle hips, held-hand junction) are placed at the
 they stay at the screen centre even after zooming toward the cursor or panning.
 
 Skeletons end at the `LeftHand` / `RightHand` joints. When holding hands, the partner is placed so its Hand
-joint sits beside the other Hand joint (`hand gap`, default = joint size, so the two hand dots just touch;
-same height, side by side on screen), and the midpoint of the two Hand joints is pinned at the screen centre.
+joint coincides with the other Hand joint, and that point is pinned at the screen centre (2 persons).
 
 `τ ladder`: one clean motion (fed back fully denoised) shown side by side at evenly spaced τ from
 `ladder max τ` down to 0 (`ladder steps`, default 6: 15, 12, 9, 6, 3, 0), each pinned at its hips, with τ

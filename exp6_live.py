@@ -85,9 +85,6 @@ def main():
         g_hstop = server.gui.add_slider(
             "prior cleanup steps", 0, 5, 1, 0,
             hint="Last diffusion steps run without the pull: more = more natural poses, hands further apart.")
-        g_hgap = server.gui.add_slider("hand gap (m)", 0.0, 0.3, 0.005, 0.04,
-                                       hint="Distance between the two held Hand joints, side by side on screen "
-                                            "(default = joint size: the two hand dots just touch).")
         g_hswap = server.gui.add_checkbox("swap hands", False,
                                           hint="Use the other hand on each side of every held pair.")
         g_same = server.gui.add_checkbox("same start pose", True,
@@ -206,11 +203,8 @@ def main():
     LH, RH, HIPS = names.index("LeftHand"), names.index("RightHand"), names.index("Hips")
 
     def hold_shift(Pa, ha, Pb, hb):
-        """Translation of body b (to the right of a on screen) so its Hand joint sits beside a's Hand
-        joint: `hand gap` apart along the screen-right direction, same height, no other offset."""
-        az = np.deg2rad(cam.az.value)
-        right = np.array([np.cos(az), 0.0, -np.sin(az)])
-        return Pa[ha] + g_hgap.value * right - Pb[hb]
+        """Translation of body b so its Hand joint coincides with body a's Hand joint."""
+        return Pa[ha] - Pb[hb]
 
     ladder_labels = [server.scene.add_label(f"/ladder_label{k}", "", visible=False, anchor="bottom-center", font_screen_scale=1.2) for k in range(8)]
     link_dots = add_dots(server, "/hand_links", (255, 255, 255), g_bwidth.value)
@@ -248,7 +242,7 @@ def main():
         if B == 1:
             shifts = [-anchor(f.joints[0])]
         elif holding() and B == 2:
-            # B's Hand joint beside A's Hand joint; their midpoint is pinned at the screen centre
+            # B's Hand joint on A's Hand joint; that point is pinned at the screen centre
             sb = hold_shift(f.joints[0], a_hand, f.joints[1], b_hand)
             clasp = 0.5 * (f.joints[0, a_hand] + f.joints[1, b_hand] + sb)
             shifts = [-clasp, sb - clasp]
@@ -261,7 +255,7 @@ def main():
                 shifts = [slots[0] - f.joints[0, HIPS], mid, slots[2] - f.joints[2, HIPS]]
                 hand_links = [(1, m_left, 0, a_hand), (1, m_right, 2, b_hand)]
             else:
-                # left partner's Hand just left of the middle's hand, right partner's just right of it
+                # partners' Hand joints on the middle's Hand joints
                 shifts = [mid - hold_shift(f.joints[0], a_hand, f.joints[1], m_left), mid,
                           mid + hold_shift(f.joints[1], m_right, f.joints[2], b_hand)]
         else:   # each motion pinned at its tracked joint (default Hips), side by side on screen
@@ -357,7 +351,7 @@ def main():
     for h in (g_clip, g_init, g_seed, g_lanes, g_same, g_offset, g_lsteps, g_lmax):
         h.on_update(restart)
     g_restart.on_click(restart)
-    for h in (g_jsize, g_bwidth, g_grid, g_bg, g_hgap):
+    for h in (g_jsize, g_bwidth, g_grid, g_bg):
         h.on_update(apply_style)
     g_track.on_update(lambda _: track_ref.update(y=None))
 
