@@ -64,10 +64,24 @@ def main():
         g_pdecay = server.gui.add_slider("pulse decay (fr)", 1, 90, 1, 6)
         g_base = server.gui.add_slider("base τ", 0.0, float(T), 0.1, 0.0)
     with server.gui.add_folder("Motions"):
-        g_lanes = server.gui.add_dropdown("motions", ("1", "3"), initial_value="1",
+        g_lanes = server.gui.add_dropdown("motions", ("1", "3", "3 holding hands", "2 holding hands"),
+                                          initial_value="1",
                                           hint="3: three motions generated at once, side by side, each pinned at its hips "
                                                "(grid is turned off automatically).")
         g_spacing = server.gui.add_slider("spacing (m)", 0.3, 4.0, 0.05, 0.8)
+        g_hlink = server.gui.add_dropdown(
+            "hand link", ("attach", "tether"), initial_value="attach",
+            hint="attach: move the partner bodies so the held hands touch (they get dragged by the hand). "
+                 "tether (3 only): bodies stay in their slots, a line joins the held hands.")
+        g_hpull = server.gui.add_slider(
+            "hand reach", 0.0, 1.0, 0.05, 0.5,
+            hint="Diffusion guidance pulling the held arms toward each other (bodies at `spacing`): share of "
+                 "the gap closed per diffusion step. 0 = display-only linking.")
+        g_hstop = server.gui.add_slider(
+            "prior cleanup steps", 0, 5, 1, 0,
+            hint="Last diffusion steps run without the pull: more = more natural poses, hands further apart.")
+        g_hswap = server.gui.add_checkbox("swap hands", False,
+                                          hint="Use the other hand on each side of every held pair.")
         g_same = server.gui.add_checkbox("same start pose", True,
                                          hint="All motions start from the same pose with different seeds "
                                               "(they diverge); off: start frames offset along the clip.")
@@ -163,7 +177,13 @@ def main():
     track_ref = {"y": None}
 
     def n_lanes() -> int:
-        return int(g_lanes.value)
+        return int(g_lanes.value.split()[0])
+
+    def holding() -> bool:
+        return "holding" in g_lanes.value
+
+    LH, RH, HIPS = names.index("LeftHand"), names.index("RightHand"), names.index("Hips")
+    link_dots = add_dots(server, "/hand_links", (255, 255, 255), g_bwidth.value)
 
     def apply_style(_=None):
         for trio in lanes_sk:
@@ -192,14 +212,36 @@ def main():
     def draw(f):
         B = f.joints.shape[0]
         overlay = g_final.value
+        links = []
+        a_hand, b_hand = (LH, RH) if g_hswap.value else (RH, LH)     # (left partner's hand, right partner's hand)
         if B == 1:
             shifts = [-anchor(f.joints[0])]
+        elif holding() and B == 2:
+            # A's hand meets B's hand; that junction is pinned at the screen centre
+            shifts = [-f.joints[0, a_hand], -f.joints[1, b_hand]]
+        elif holding() and B == 3:
+            # middle pinned at its hips; neighbours hold the middle's hands
+            mid = -f.joints[1, HIPS]
+            m_left, m_right = (RH, LH) if g_hswap.value else (LH, RH)
+            if g_hlink.value == "tether":
+                slots = lane_slots(3)
+                shifts = [slots[0] - f.joints[0, HIPS], mid, slots[2] - f.joints[2, HIPS]]
+                links = [(f.joints[1, m_left] + shifts[1], f.joints[0, a_hand] + shifts[0]),
+                         (f.joints[1, m_right] + shifts[1], f.joints[2, b_hand] + shifts[2])]
+            else:
+                shifts = [f.joints[1, m_left] + mid - f.joints[0, a_hand], mid,
+                          f.joints[1, m_right] + mid - f.joints[2, b_hand]]
         else:   # each motion pinned at its tracked joint (default Hips), side by side on screen
             k = names.index(g_track.value) if g_track.value != "off" else 0
             slots = lane_slots(B)
             shifts = [slots[b] - f.joints[b, k] for b in range(B)]
         with server.atomic():
             grid.position = shifts[0]
+            link_dots.visible = bool(links) and g_bones.value
+            if link_dots.visible:
+                pts = np.array([p for pair in links for p in pair], np.float32)
+                link_dots.points = line_dots(pts, np.array([[2 * k, 2 * k + 1] for k in range(len(links))]),
+                                             g_bwidth.value)
             for b, (sk_final, sk_main, sk_main_y) in enumerate(lanes_sk):
                 if b < B:
                     sh = shifts[b]
@@ -226,11 +268,20 @@ def main():
     def skip() -> int:
         return 2 if (g_fps.value == "15" and g_realspeed.value) else 1
 
+    def hand_config():
+        B = n_lanes()
+        if not holding():
+            return dict(hand_pairs=[], slots=None, hand_pull=0.0)
+        a_hand, b_hand = (LH, RH) if g_hswap.value else (RH, LH)
+        m_left, m_right = (RH, LH) if g_hswap.value else (LH, RH)
+        pairs = [(0, a_hand, 1, b_hand)] if B == 2 else [(1, m_left, 0, a_hand), (1, m_right, 2, b_hand)]
+        return dict(hand_pairs=pairs, slots=lane_slots(B), hand_pull=g_hpull.value, guide_stop=int(g_hstop.value))
+
     def sync(_=None):
         lv = cycle_levels()
         state["levels"] = lv
         plot.set_values(lv, vmax=float(T))
-        live.configure(levels=lv, feed=g_feed.value, root=g_root.value, decode=g_decode.value,
+        live.configure(**hand_config(), levels=lv, feed=g_feed.value, root=g_root.value, decode=g_decode.value,
                        noise_scale=g_nscale.value, noise_coherence=g_ncoh.value, clip=g_clipv.value,
                        want_final=g_final.value, skip=skip())
 
@@ -243,15 +294,20 @@ def main():
             starts = [frames[int(g_init.value) % len(frames)]] * B
         else:
             starts = [frames[(int(g_init.value) + b * int(g_offset.value)) % len(frames)] for b in range(B)]
+        live.configure(**hand_config())
         live.reset(np.stack(starts), [int(g_seed.value) + b for b in range(B)])
         apply_style()
 
     state = {"levels": np.zeros(1)}
     history: deque = deque(maxlen=int(120 * GEN_FPS))
+    for h in (g_hpull, g_hstop, g_hswap, g_spacing, cam.az):
+        h.on_update(lambda _: live.configure(**hand_config()))
     for h in (g_stype, g_cycle, g_rfade, g_rstart, g_rpeak, g_rcurve, g_rpower, g_pframes, g_pcount, g_ppeak,
               g_pattack, g_pdecay, g_base, g_feed, g_root, g_nscale, g_ncoh, g_clipv, g_decode, g_final,
               g_fps, g_realspeed):
         h.on_update(sync)
+    link_dots_ref = link_dots
+    g_bwidth.on_update(lambda _: setattr(link_dots_ref, "point_size", g_bwidth.value))
     for h in (g_clip, g_init, g_seed, g_lanes, g_same, g_offset):
         h.on_update(restart)
     g_restart.on_click(restart)

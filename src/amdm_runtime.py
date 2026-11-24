@@ -169,8 +169,12 @@ class AMDMRuntime:
 
     @torch.no_grad()
     def denoise_to_batch(self, cond: torch.Tensor, level: float, noises: torch.Tensor, clip: float = 4.0,
-                         final: bool = False):
-        """Batched denoise_to: cond [B,D], noises [B,T+1,D] -> (x_level, x0_hat, x_final|None), each [B,D]."""
+                         final: bool = False, guide=None, guide_stop: int = 0):
+        """Batched denoise_to: cond [B,D], noises [B,T+1,D] -> (x_level, x0_hat, x_final|None), each [B,D].
+
+        guide(x0_hat, t) -> nudged x0_hat (optional), applied for steps t >= guide_stop; x_t is
+        shifted by the same amount (scaled by sqrt(alpha_bar_t)) so the nudge persists.
+        """
         level = float(np.clip(level, 0.0, self.T))
         k_lo = int(np.floor(level))
         k_hi = min(k_lo + 1, self.T)
@@ -183,6 +187,10 @@ class AMDMRuntime:
             ts = torch.full((B,), t, device=self.device, dtype=torch.long)
             eps = self.diff.model(cond, x, self.diff.time_mlp(ts))
             x0_hat = self.diff.get_x0_from_xt(x, ts, eps).clamp(-clip, clip)
+            if guide is not None and t >= guide_stop:
+                x0_new = guide(x0_hat, t).clamp(-clip, clip)
+                x = x + self.diff.sqrt_alphas_cumprod[t] * (x0_new - x0_hat)
+                x0_hat = x0_new
             x = self.coef_x0[t] * x0_hat + self.coef_xt[t] * x
             if t > 0:
                 x = x + self.diff.sigma[t] * noises[:, t]

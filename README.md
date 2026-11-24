@@ -40,6 +40,15 @@ from the same pose with different seeds (or from frames offset along the clip). 
 worker (~36 frames/s), three run batched on an MPS worker (~34 frames/s; MPS cost barely grows with batch
 size, whereas three parallel CPU processes only reached ~20 frames/s).
 
+`3 holding hands`: the middle motion is pinned at its hips and holds the neighbours' hands (middle left hand ↔
+left partner's right hand, middle right hand ↔ right partner's left hand; `swap hands` flips them).
+`2 holding hands`: A's right hand holds B's left hand and that junction is pinned on screen. `hand link`:
+`attach` moves the partner bodies so the held hands touch; `tether` (3 only) keeps the bodies in their slots
+and draws a line between the hands. `hand reach` adds diffusion guidance in the live worker that pulls the
+held arms (hand, forearm, upper arm) toward each other with the bodies at `spacing`, so arms reach out instead
+of bodies overlapping (mean hand gap 0.40 → 0.11 m); `prior cleanup steps` lets the last steps run without
+the pull (more natural poses, but the LaFAN1 prior then pulls the arms back).
+
 ## Experiment 5 — text timeline with DiP (+ pulses / ramp / dip)
 
 ```bash

@@ -37,7 +37,58 @@ def _worker(cmd_q, out_q, device: str = "cpu"):
     torch.set_num_threads(1)
     rt = AMDMRuntime("lafan1", device=device)
     s = {"levels": np.zeros(1), "feed": "xt", "root": "display", "decode": "position",
-         "noise_scale": 1.0, "noise_coherence": 0.0, "clip": 4.0, "want_final": False, "skip": 1}
+         "noise_scale": 1.0, "noise_coherence": 0.0, "clip": 4.0, "want_final": False, "skip": 1,
+         # hand holding: pairs (lane_a, joint_a, lane_b, joint_b), lane slots [B,3], pull per frame (0..1)
+         "hand_pairs": [], "slots": None, "hand_pull": 0.0, "guide_stop": 0}
+    names = rt.joint_names
+    arm_chain = {names.index("LeftHand"): [(names.index("LeftForeArm"), 0.6), (names.index("LeftArm"), 0.25)],
+                 names.index("RightHand"): [(names.index("RightForeArm"), 0.6), (names.index("RightArm"), 0.25)]}
+    jmask = torch.ones(rt.J, 3, device=device)
+    jmask[0, 0] = jmask[0, 2] = 0.0
+    std_safe = torch.where(rt.std > 1e-6, rt.std, torch.ones_like(rt.std))
+    feat_w = torch.ones(rt.D, device=device)
+    feat_w[:3] = 0.0                       # hands reach with the limbs; root motion stays the prior's
+
+    def world_t(xp, yaw_prev, pos_prev):
+        """Denormalised [B,D] -> world joints [B,J,3] (torch, one step of the root integration)."""
+        yw = yaw_prev + xp[:, 2]
+        c, sn = torch.cos(yw), torch.sin(yw)
+        z, o = torch.zeros_like(c), torch.ones_like(c)
+        R = torch.stack([torch.stack([c, z, sn], -1), torch.stack([z, o, z], -1),
+                         torch.stack([-sn, z, c], -1)], -2)
+        step = torch.stack([xp[:, 0], z, xp[:, 1]], -1)
+        root = pos_prev + torch.einsum("bi,bij->bj", step, R)
+        local = xp[:, rt.jnt_lo:rt.jnt_hi].reshape(-1, rt.J, 3) * jmask
+        return torch.einsum("bji,bik->bjk", local, R) + root[:, None]
+
+    def make_hand_guide(yaw_prev, pos_prev):
+        pairs, slots = s["hand_pairs"], s["slots"]
+        if not pairs or s["hand_pull"] <= 0 or slots is None:
+            return None
+        slots_t = torch.tensor(np.asarray(slots, np.float32), device=device)
+        yaw_t = torch.tensor(yaw_prev, dtype=torch.float32, device=device)
+        pos_t = torch.tensor(pos_prev, dtype=torch.float32, device=device)
+        k = float(s["hand_pull"])          # fraction of the remaining gap closed per diffusion step
+
+        def guide(x0, t):
+            with torch.enable_grad():
+                xp = rt.denorm(x0).detach().requires_grad_(True)
+                w = world_t(xp, yaw_t, pos_t)
+                # each body placed at its slot (hips pinned): the frame in which hands should meet
+                placed = w - w[:, :1] + slots_t[:, None]
+                disp = torch.zeros_like(w)
+                for la, ja, lb, jb in pairs:
+                    gap = (placed[lb, jb] - placed[la, ja]).detach()
+                    for lane, j, sgn in ((la, ja, 1.0), (lb, jb, -1.0)):
+                        # move the whole arm (hand, forearm, upper arm) so the pose stays an arm
+                        disp[lane, j] += sgn * 0.5 * k * gap
+                        for jj, wt in arm_chain.get(j, []):
+                            disp[lane, jj] += sgn * 0.5 * k * wt * gap
+                loss = 0.5 * ((w - (w + disp).detach()) ** 2).sum()
+                (g,) = torch.autograd.grad(loss, xp)
+            return x0 - g * feat_w / std_safe
+        return guide
+
     cond = gens = noise_state = None
     epoch, i = 0, 0
     yaw = pos = None
@@ -86,9 +137,10 @@ def _worker(cmd_q, out_q, device: str = "cpu"):
             fresh = torch.stack([torch.randn(rt.T + 1, rt.D, generator=g) for g in gens])
             noise_state = rho * noise_state + np.sqrt(1 - rho * rho) * fresh
             want_final = s["want_final"] or s["feed"] == "final"
-            with torch.inference_mode():
+            with torch.no_grad():      # (not inference_mode: hand guidance needs autograd)
                 x_l, x0, x_f = rt.denoise_to_batch(cond, level, (noise_state * s["noise_scale"]).to(device),
-                                                   s["clip"], final=want_final)
+                                                   s["clip"], final=want_final,
+                                                   guide=make_hand_guide(yaw, pos), guide_stop=int(s["guide_stop"]))
             nxt = {"x0": x0, "final": x_f}.get(s["feed"], x_l)
             if s["feed"] == "mix":
                 nxt = 0.5 * (x_l + x0)
