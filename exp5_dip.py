@@ -30,7 +30,7 @@ from viewer_common import (CameraRig, CurvePlot, PersistentGui, add_dots, add_sp
 
 OUT_DIR = os.path.join(ROOT, "outputs")
 VIDEO_W, VIDEO_H, FPS = 1080, 1350, 30
-HIDDEN_WHEN_REDUCED = ("Spine1", "Spine2", "LeftCollar", "RightCollar")
+HIDDEN_WHEN_REDUCED = ("Spine1", "Spine2", "Spine3", "LeftCollar", "RightCollar")
 DEFAULT_TIMELINE = """0: a person walks forward slowly and gracefully
 6: a person spins around slowly with both arms raised
 14: a person dances like a ballerina, stretching one leg back
@@ -129,7 +129,7 @@ def main():
     keep = np.array([i for i in range(J) if i not in hide])
     links_red = np.concatenate([np.array([l for l in LINKS if l[0] not in hide and l[1] not in hide]),
                                 np.array([(names.index(a), names.index(b)) for a, b in
-                                          (("Pelvis", "Spine3"), ("Neck", "LeftShoulder"),
+                                          (("Pelvis", "Neck"), ("Neck", "LeftShoulder"),
                                            ("Neck", "RightShoulder"))])])
 
     class Skel:

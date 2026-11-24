@@ -27,7 +27,7 @@ from viewer_common import CameraRig, CurvePlot, PersistentGui, add_dots, add_spa
 
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
 VIDEO_W, VIDEO_H, FPS = 1080, 1350, 30
-HIDDEN_WHEN_REDUCED = ("Spine", "Spine1", "LeftShoulder", "RightShoulder")
+HIDDEN_WHEN_REDUCED = ("Spine", "Spine1", "Spine2", "LeftShoulder", "RightShoulder")
 
 
 def main():
@@ -121,7 +121,7 @@ def main():
     hide = [names.index(n) for n in HIDDEN_WHEN_REDUCED]
     keep = np.array([i for i in range(J) if i not in hide])
     bridge = [(names.index(a), names.index(b)) for a, b in
-              (("Hips", "Spine2"), ("Neck", "LeftArm"), ("Neck", "RightArm"))]
+              (("Hips", "Neck"), ("Neck", "LeftArm"), ("Neck", "RightArm"))]
     body_links_full = np.asarray(rt.links)
     body_links_red = np.concatenate([
         np.array([l for l in body_links_full if l[0] not in hide and l[1] not in hide]), np.array(bridge)])

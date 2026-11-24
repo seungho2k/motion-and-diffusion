@@ -22,6 +22,18 @@ mkdir -p data/lafan1 && curl -L -o /tmp/lafan1.zip \
   && unzip -o /tmp/lafan1.zip -d data/lafan1
 ```
 
+## Experiment 6 — endless real-time A-MDM with a repeating τ cycle
+
+```bash
+uv run python exp6_live.py       # open http://localhost:8080
+```
+
+A child process (`src/live.py`) keeps generating new frames forever (no GIL contention with the viewer;
+~40 frames/s on an M5 CPU, ~36 with the t=0 overlay). The diffusion level follows a cycle (ramp / pulses /
+none) that repeats every `cycle` seconds while the motion itself is always new. Display at 30 or 15 fps; at
+15 fps either keep real speed (generate 2, show 1) or play in slow motion. `restart` re-seeds from the start
+clip; `Export` renders the last N seconds.
+
 ## Experiment 5 — text timeline with DiP (+ pulses / ramp / dip)
 
 ```bash
@@ -90,8 +102,8 @@ result is fed back as the condition for the next frame. The viewer exposes:
   Joints and bones are flat, unlit white (#ffffff) screen-facing circles on a black background (no shadows);
   `overlay t=0` also runs each frame's denoising to the end with the same noise and draws that skeleton in
   white while the current-t skeleton turns yellow (generation ~3x slower while on);
-  joints / bones can be hidden; `reduced skeleton` (default on) drops Spine, Spine1 and both
-  shoulders: one torso bone Hips–Spine2 and the arms attached at the Neck; joint size, bone width, grid and background colour are adjustable
+  joints / bones can be hidden; `reduced skeleton` (default on) drops Spine, Spine1, Spine2 and both
+  shoulders: one torso bone Hips–Neck and the arms attached at the Neck; joint size, bone width, grid and background colour are adjustable
 - **Camera** — tracking (default joint: RightHand) subtracts the tracked joint from every point before it
   is sent, so that joint sits exactly at the view centre in the same update as the new pose; the camera
   itself stays put. `follow height` can freeze vertical tracking. Orbit / zoom / pan in the viewport work
@@ -115,6 +127,8 @@ src/gravity.py        two-dancer generation with joint-to-joint gravity guidance
 src/viewer_common.py  shared viser pieces (camera rig, space key, dot drawing, curve plot)
 bvh_viewer.py         viser BVH playback (port 8081)
 src/bvh_simple.py     minimal BVH reader + forward kinematics
+exp6_live.py          viser app for experiment 6 (real-time)
+src/live.py           endless A-MDM generation in a child process
 exp5_dip.py           viser app for experiment 5 (DiP)
 src/dip_runtime.py    DiP loader / planner without the CLoSD stack
 src/dip_gen.py        text-timeline generation with receding-horizon tau schedules

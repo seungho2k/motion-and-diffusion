@@ -105,7 +105,7 @@ def main():
         g_joints = server.gui.add_checkbox("joints", True)
         g_reduced = server.gui.add_checkbox(
             "reduced skeleton", True,
-            hint="Drop Spine, Spine1 and both shoulders: torso bone Hips-Spine2, arms attach at Neck.")
+            hint="Drop Spine, Spine1, Spine2 and both shoulders: torso bone Hips-Neck, arms attach at Neck.")
         g_bones = server.gui.add_checkbox("bones", True)
         g_bthick = server.gui.add_slider("bone width", 0.002, 0.05, 0.001, 0.008)
         g_grid = server.gui.add_checkbox("grid", True)
@@ -157,7 +157,7 @@ def main():
         return server.scene.add_point_cloud(name, zeros_j, color, point_size=size,
                                             point_shape="circle", point_shading="flat", precision="float32")
 
-    HIDDEN_WHEN_REDUCED = ("Spine", "Spine1", "LeftShoulder", "RightShoulder")
+    HIDDEN_WHEN_REDUCED = ("Spine", "Spine1", "Spine2", "LeftShoulder", "RightShoulder")
     reduced_idx = np.array([i for i, n in enumerate(rt.joint_names) if n not in HIDDEN_WHEN_REDUCED])
 
     def _links(pairs):
@@ -169,7 +169,7 @@ def main():
         np.array([l for l in rt.links
                   if rt.joint_names[l[0]] not in HIDDEN_WHEN_REDUCED
                   and rt.joint_names[l[1]] not in HIDDEN_WHEN_REDUCED]),
-        _links([("Hips", "Spine2"), ("Neck", "LeftArm"), ("Neck", "RightArm")]),
+        _links([("Hips", "Neck"), ("Neck", "LeftArm"), ("Neck", "RightArm")]),
     ])
 
     class Skel:
