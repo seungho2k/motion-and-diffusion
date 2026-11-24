@@ -78,13 +78,6 @@ def main():
             "hand link", ("attach", "tether"), initial_value="attach",
             hint="attach: move the partner bodies so the held hands touch (they get dragged by the hand). "
                  "tether (3 only): bodies stay in their slots, a line joins the held hands.")
-        g_hpull = server.gui.add_slider(
-            "hand reach", 0.0, 1.0, 0.05, 0.5,
-            hint="Diffusion guidance pulling the held arms toward each other (bodies at `spacing`): share of "
-                 "the gap closed per diffusion step. 0 = display-only linking.")
-        g_hstop = server.gui.add_slider(
-            "prior cleanup steps", 0, 5, 1, 0,
-            hint="Last diffusion steps run without the pull: more = more natural poses, hands further apart.")
         g_hswap = server.gui.add_checkbox("swap hands", False,
                                           hint="Use the other hand on each side of every held pair.")
         g_same = server.gui.add_checkbox("same start pose", True,
@@ -309,13 +302,9 @@ def main():
         return 2 if (g_fps.value == "15" and g_realspeed.value) else 1
 
     def hand_config():
-        B = n_lanes()
-        if not holding():
-            return dict(hand_pairs=[], slots=None, hand_pull=0.0)
-        a_hand, b_hand = (LH, RH) if g_hswap.value else (RH, LH)
-        m_left, m_right = (RH, LH) if g_hswap.value else (LH, RH)
-        pairs = [(0, a_hand, 1, b_hand)] if B == 2 else [(1, m_left, 0, a_hand), (1, m_right, 2, b_hand)]
-        return dict(hand_pairs=pairs, slots=lane_slots(B), hand_pull=g_hpull.value, guide_stop=int(g_hstop.value))
+        # Holding hands is purely a placement: each body is tracked at its held hand and the hands are
+        # brought to the same screen point. No guidance acts on the motion (it stretched the arms).
+        return dict(hand_pairs=[], slots=None, hand_pull=0.0)
 
     def sync(_=None):
         lv = cycle_levels()
@@ -340,8 +329,6 @@ def main():
 
     state = {"levels": np.zeros(1)}
     history: deque = deque(maxlen=int(120 * GEN_FPS))
-    for h in (g_hpull, g_hstop, g_hswap, g_spacing, cam.az):
-        h.on_update(lambda _: live.configure(**hand_config()))
     for h in (g_stype, g_cycle, g_rfade, g_rstart, g_rpeak, g_rcurve, g_rpower, g_pframes, g_pcount, g_ppeak,
               g_pattack, g_pdecay, g_base, g_feed, g_root, g_nscale, g_ncoh, g_clipv, g_decode, g_final,
               g_fps, g_realspeed):

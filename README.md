@@ -44,10 +44,9 @@ size, whereas three parallel CPU processes only reached ~20 frames/s).
 left partner's right hand, middle right hand ↔ right partner's left hand; `swap hands` flips them).
 `2 holding hands`: A's right hand holds B's left hand and that junction is pinned on screen. `hand link`:
 `attach` moves the partner bodies so the held hands touch; `tether` (3 only) keeps the bodies in their slots
-and draws a line between the hands. `hand reach` adds diffusion guidance in the live worker that pulls the
-held arms (hand, forearm, upper arm) toward each other with the bodies at `spacing`, so arms reach out instead
-of bodies overlapping (mean hand gap 0.40 → 0.11 m); `prior cleanup steps` lets the last steps run without
-the pull (more natural poses, but the LaFAN1 prior then pulls the arms back).
+and draws a line between the hands. Holding hands is only a placement: each body is tracked at its held hand
+and the hands are brought to the same screen point; no guidance changes the motion (an earlier hand-reach
+guidance stretched the arms, since position channels carry no bone-length constraint).
 
 Pinned points (tracked joint, middle hips, held-hand junction) are placed at the camera's look-at point, so
 they stay at the screen centre even after zooming toward the cursor or panning.
