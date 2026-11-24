@@ -201,6 +201,32 @@ class AMDMRuntime:
         return x_level, x0_at, (states[0] if final else None)
 
     @torch.no_grad()
+    def denoise_record(self, cond: torch.Tensor, noises: torch.Tensor, levels, clip: float = 4.0):
+        """One full reverse chain for a single frame, returning the state at each requested level.
+
+        cond [1,D], noises [1,T+1,D]; levels: iterable of (fractional) tau values.
+        Returns (states [L,D] at the levels, x_final [1,D]).
+        """
+        x = noises[:, self.T]
+        states = {self.T: x}
+        for t in range(self.T - 1, -1, -1):
+            ts = torch.full((1,), t, device=self.device, dtype=torch.long)
+            eps = self.diff.model(cond, x, self.diff.time_mlp(ts))
+            x0_hat = self.diff.get_x0_from_xt(x, ts, eps).clamp(-clip, clip)
+            x = self.coef_x0[t] * x0_hat + self.coef_xt[t] * x
+            if t > 0:
+                x = x + self.diff.sigma[t] * noises[:, t]
+            states[t] = x
+        out = []
+        for lv in levels:
+            lv = float(np.clip(lv, 0.0, self.T))
+            lo = int(np.floor(lv))
+            hi = min(lo + 1, self.T)
+            fr = lv - lo
+            out.append(((1 - fr) * states[lo] + fr * states[hi])[0])
+        return torch.stack(out), states[0]
+
+    @torch.no_grad()
     def generate(self, levels: np.ndarray, p: GenParams, decode_mode: str = "position") -> GenResult:
         N = len(levels)
         g = torch.Generator(device="cpu").manual_seed(p.seed)

@@ -64,11 +64,16 @@ def main():
         g_pdecay = server.gui.add_slider("pulse decay (fr)", 1, 90, 1, 6)
         g_base = server.gui.add_slider("base τ", 0.0, float(T), 0.1, 0.0)
     with server.gui.add_folder("Motions"):
-        g_lanes = server.gui.add_dropdown("motions", ("1", "3", "3 holding hands", "2 holding hands"),
+        g_lanes = server.gui.add_dropdown("motions", ("1", "3", "3 holding hands", "2 holding hands", "τ ladder"),
                                           initial_value="1",
                                           hint="3: three motions generated at once, side by side, each pinned at its hips "
                                                "(grid is turned off automatically).")
         g_spacing = server.gui.add_slider("spacing (m)", 0.3, 4.0, 0.05, 0.8)
+        g_lsteps = server.gui.add_slider("ladder steps", 2, 8, 1, 6,
+                                         hint="τ ladder: one clean motion shown side by side at evenly spaced τ, "
+                                              "from `ladder max τ` (left) down to 0 (right).")
+        g_lmax = server.gui.add_slider("ladder max τ", 0.5, 15.0, 0.5, 15.0)
+        g_llabels = server.gui.add_checkbox("ladder labels", True)
         g_hlink = server.gui.add_dropdown(
             "hand link", ("attach", "tether"), initial_value="attach",
             hint="attach: move the partner bodies so the held hands touch (they get dragged by the hand). "
@@ -171,25 +176,39 @@ def main():
             if self.b.visible:
                 self.b.points = line_dots(pts, links_red if g_reduced.value else links_full, g_bwidth.value)
 
-    MAX_LANES = 3
+    MAX_LANES = 8
     lanes_sk = [(Skel(f"l{k}/final", (255, 255, 255)), Skel(f"l{k}/main", (255, 255, 255)),
                  Skel(f"l{k}/main_y", (255, 214, 0))) for k in range(MAX_LANES)]
     track_ref = {"y": None}
 
+    def ladder() -> bool:
+        return g_lanes.value == "τ ladder"
+
+    def ladder_levels() -> list:
+        return [float(v) for v in np.linspace(g_lmax.value, 0.0, int(g_lsteps.value))]
+
     def n_lanes() -> int:
-        return int(g_lanes.value.split()[0])
+        """Motions generated (the ladder generates one and shows it several times)."""
+        return 1 if ladder() else int(g_lanes.value.split()[0])
+
+    def screen_centre() -> np.ndarray:
+        """Point the viewer looks at (screen centre); pinned joints are placed here."""
+        for c in server.get_clients().values():
+            return np.asarray(c.camera.look_at, np.float64)
+        return np.zeros(3)
 
     def holding() -> bool:
         return "holding" in g_lanes.value
 
     LH, RH, HIPS = names.index("LeftHand"), names.index("RightHand"), names.index("Hips")
+    ladder_labels = [server.scene.add_label(f"/ladder_label{k}", "", visible=False, anchor="bottom-center", font_screen_scale=1.2) for k in range(8)]
     link_dots = add_dots(server, "/hand_links", (255, 255, 255), g_bwidth.value)
 
     def apply_style(_=None):
         for trio in lanes_sk:
             for sk in trio:
                 sk.style()
-        grid.visible = g_grid.value and n_lanes() == 1      # several motions: no shared floor
+        grid.visible = g_grid.value and n_lanes() == 1 and not ladder()   # several bodies: no shared floor
         server.scene.set_background_image(np.full((4, 4, 3), g_bg.value, np.uint8))
 
     def lane_slots(B: int) -> np.ndarray:
@@ -214,6 +233,7 @@ def main():
         overlay = g_final.value
         links = []
         a_hand, b_hand = (LH, RH) if g_hswap.value else (RH, LH)     # (left partner's hand, right partner's hand)
+        hand_links = []                                               # [(lane, joint, lane, joint)]
         if B == 1:
             shifts = [-anchor(f.joints[0])]
         elif holding() and B == 2:
@@ -226,8 +246,7 @@ def main():
             if g_hlink.value == "tether":
                 slots = lane_slots(3)
                 shifts = [slots[0] - f.joints[0, HIPS], mid, slots[2] - f.joints[2, HIPS]]
-                links = [(f.joints[1, m_left] + shifts[1], f.joints[0, a_hand] + shifts[0]),
-                         (f.joints[1, m_right] + shifts[1], f.joints[2, b_hand] + shifts[2])]
+                hand_links = [(1, m_left, 0, a_hand), (1, m_right, 2, b_hand)]
             else:
                 shifts = [f.joints[1, m_left] + mid - f.joints[0, a_hand], mid,
                           f.joints[1, m_right] + mid - f.joints[2, b_hand]]
@@ -235,7 +254,20 @@ def main():
             k = names.index(g_track.value) if g_track.value != "off" else 0
             slots = lane_slots(B)
             shifts = [slots[b] - f.joints[b, k] for b in range(B)]
+        # the pinned point sits at the screen centre (the camera's look-at), not the world origin
+        c = screen_centre()
+        shifts = [sh + c for sh in shifts]
+        links = [(f.joints[la, ja] + shifts[la], f.joints[lb, jb] + shifts[lb]) for la, ja, lb, jb in hand_links]
+        show_labels = ladder() and g_llabels.value
+        lv = ladder_levels()
         with server.atomic():
+            for k, lab in enumerate(ladder_labels):
+                lab.visible = show_labels and k < B
+                if lab.visible:
+                    lab.position = tuple(lane_slots(B)[k] + c + np.array([0.0, 1.05, 0.0]))
+                    txt = f"τ = {lv[k]:.1f}" if k < len(lv) else ""
+                    if lab.text != txt:
+                        lab.text = txt
             grid.position = shifts[0]
             link_dots.visible = bool(links) and g_bones.value
             if link_dots.visible:
@@ -294,7 +326,7 @@ def main():
             starts = [frames[int(g_init.value) % len(frames)]] * B
         else:
             starts = [frames[(int(g_init.value) + b * int(g_offset.value)) % len(frames)] for b in range(B)]
-        live.configure(**hand_config())
+        live.configure(**hand_config(), ladder=ladder_levels() if ladder() else None)
         live.reset(np.stack(starts), [int(g_seed.value) + b for b in range(B)])
         apply_style()
 
@@ -308,7 +340,7 @@ def main():
         h.on_update(sync)
     link_dots_ref = link_dots
     g_bwidth.on_update(lambda _: setattr(link_dots_ref, "point_size", g_bwidth.value))
-    for h in (g_clip, g_init, g_seed, g_lanes, g_same, g_offset):
+    for h in (g_clip, g_init, g_seed, g_lanes, g_same, g_offset, g_lsteps, g_lmax):
         h.on_update(restart)
     g_restart.on_click(restart)
     for h in (g_jsize, g_bwidth, g_grid, g_bg):

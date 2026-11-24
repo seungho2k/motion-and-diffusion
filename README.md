@@ -49,6 +49,14 @@ held arms (hand, forearm, upper arm) toward each other with the bodies at `spaci
 of bodies overlapping (mean hand gap 0.40 → 0.11 m); `prior cleanup steps` lets the last steps run without
 the pull (more natural poses, but the LaFAN1 prior then pulls the arms back).
 
+Pinned points (tracked joint, middle hips, held-hand junction) are placed at the camera's look-at point, so
+they stay at the screen centre even after zooming toward the cursor or panning.
+
+`τ ladder`: one clean motion (fed back fully denoised) shown side by side at evenly spaced τ from
+`ladder max τ` down to 0 (`ladder steps`, default 6: 15, 12, 9, 6, 3, 0), each pinned at its hips, with τ
+labels. All levels come from the same reverse chain and noise of each frame, so the ladder costs one denoise
+per frame.
+
 ## Experiment 5 — text timeline with DiP (+ pulses / ramp / dip)
 
 ```bash

@@ -39,7 +39,9 @@ def _worker(cmd_q, out_q, device: str = "cpu"):
     s = {"levels": np.zeros(1), "feed": "xt", "root": "display", "decode": "position",
          "noise_scale": 1.0, "noise_coherence": 0.0, "clip": 4.0, "want_final": False, "skip": 1,
          # hand holding: pairs (lane_a, joint_a, lane_b, joint_b), lane slots [B,3], pull per frame (0..1)
-         "hand_pairs": [], "slots": None, "hand_pull": 0.0, "guide_stop": 0}
+         "hand_pairs": [], "slots": None, "hand_pull": 0.0, "guide_stop": 0,
+         # tau ladder: one clean motion, shown at several fixed levels from the same chain
+         "ladder": None}
     names = rt.joint_names
     arm_chain = {names.index("LeftHand"): [(names.index("LeftForeArm"), 0.6), (names.index("LeftArm"), 0.25)],
                  names.index("RightHand"): [(names.index("RightForeArm"), 0.6), (names.index("RightArm"), 0.25)]}
@@ -130,6 +132,29 @@ def _worker(cmd_q, out_q, device: str = "cpu"):
                 continue
 
         B = cond.shape[0]
+        if s["ladder"] and B == 1:
+            for _ in range(max(1, int(s["skip"]))):
+                fresh = torch.randn(1, rt.T + 1, rt.D, generator=gens[0])
+                rho = float(np.clip(s["noise_coherence"], 0.0, 0.999))
+                noise_state = rho * noise_state + np.sqrt(1 - rho * rho) * fresh
+                with torch.no_grad():
+                    xs, x_f = rt.denoise_record(cond, (noise_state * s["noise_scale"]).to(device), s["ladder"], s["clip"])
+                cond = x_f.clamp(-s["clip"], s["clip"])           # the motion itself stays clean
+                d_s = rt.denorm(xs).cpu().numpy()
+                d_f = rt.denorm(x_f).cpu().numpy()[0]
+                yaw[0] += float(d_f[2])                           # one shared root path (the clean one)
+                R = _rot_yaw(yaw[0])
+                if i > 0:
+                    pos[0] = pos[0] + np.array([d_f[0], 0.0, d_f[1]]) @ R
+                J_l = np.stack([local(d) @ R + pos[0] for d in d_s]).astype(np.float32)
+                J_f = np.repeat((local(d_f) @ R + pos[0])[None], len(d_s), 0).astype(np.float32)
+                frame = LiveFrame(i, 0.0, J_l, J_f)
+                i += 1
+            try:
+                out_q.put((epoch, frame), timeout=0.05)
+            except queue.Full:
+                pending = (epoch, frame)
+            continue
         for _ in range(max(1, int(s["skip"]))):
             levels = s["levels"]
             level = float(levels[i % len(levels)])
