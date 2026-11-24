@@ -34,6 +34,12 @@ none) that repeats every `cycle` seconds while the motion itself is always new. 
 15 fps either keep real speed (generate 2, show 1) or play in slow motion. `restart` re-seeds from the start
 clip; `Export` renders the last N seconds.
 
+`motions: 3` generates three motions at once and shows them side by side along the camera's right vector,
+each pinned at its tracked joint (default Hips); the floor grid is turned off automatically. They start
+from the same pose with different seeds (or from frames offset along the clip). One motion runs on a CPU
+worker (~36 frames/s), three run batched on an MPS worker (~34 frames/s; MPS cost barely grows with batch
+size, whereas three parallel CPU processes only reached ~20 frames/s).
+
 ## Experiment 5 — text timeline with DiP (+ pulses / ramp / dip)
 
 ```bash

@@ -168,6 +168,31 @@ class AMDMRuntime:
         return x_level[0], x0_at_level[0], x_final
 
     @torch.no_grad()
+    def denoise_to_batch(self, cond: torch.Tensor, level: float, noises: torch.Tensor, clip: float = 4.0,
+                         final: bool = False):
+        """Batched denoise_to: cond [B,D], noises [B,T+1,D] -> (x_level, x0_hat, x_final|None), each [B,D]."""
+        level = float(np.clip(level, 0.0, self.T))
+        k_lo = int(np.floor(level))
+        k_hi = min(k_lo + 1, self.T)
+        frac = level - k_lo
+        B = cond.shape[0]
+        x = noises[:, self.T]
+        states = {self.T: x}
+        x0_hat = x0_at = x
+        for t in range(self.T - 1, (0 if final else k_lo) - 1, -1):
+            ts = torch.full((B,), t, device=self.device, dtype=torch.long)
+            eps = self.diff.model(cond, x, self.diff.time_mlp(ts))
+            x0_hat = self.diff.get_x0_from_xt(x, ts, eps).clamp(-clip, clip)
+            x = self.coef_x0[t] * x0_hat + self.coef_xt[t] * x
+            if t > 0:
+                x = x + self.diff.sigma[t] * noises[:, t]
+            states[t] = x
+            if t == k_lo:
+                x0_at = x0_hat
+        x_level = (1 - frac) * states[k_lo] + frac * states[k_hi]
+        return x_level, x0_at, (states[0] if final else None)
+
+    @torch.no_grad()
     def generate(self, levels: np.ndarray, p: GenParams, decode_mode: str = "position") -> GenResult:
         N = len(levels)
         g = torch.Generator(device="cpu").manual_seed(p.seed)

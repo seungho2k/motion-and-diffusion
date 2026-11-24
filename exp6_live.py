@@ -63,6 +63,15 @@ def main():
         g_pattack = server.gui.add_slider("pulse attack (fr)", 0, 20, 1, 2)
         g_pdecay = server.gui.add_slider("pulse decay (fr)", 1, 90, 1, 6)
         g_base = server.gui.add_slider("base τ", 0.0, float(T), 0.1, 0.0)
+    with server.gui.add_folder("Motions"):
+        g_lanes = server.gui.add_dropdown("motions", ("1", "3"), initial_value="1",
+                                          hint="3: three motions generated at once, side by side, each pinned at its hips "
+                                               "(grid is turned off automatically).")
+        g_spacing = server.gui.add_slider("spacing (m)", 0.3, 4.0, 0.05, 0.8)
+        g_same = server.gui.add_checkbox("same start pose", True,
+                                         hint="All motions start from the same pose with different seeds "
+                                              "(they diverge); off: start frames offset along the clip.")
+        g_offset = server.gui.add_slider("start frame offset", 0, 2000, 10, 300)
     with server.gui.add_folder("Generation"):
         g_clip = server.gui.add_dropdown("start clip", ("sample",) + tuple(clips),
                                          initial_value="dance1_subject1" if "dance1_subject1" in clips else "sample")
@@ -148,16 +157,27 @@ def main():
             if self.b.visible:
                 self.b.points = line_dots(pts, links_red if g_reduced.value else links_full, g_bwidth.value)
 
-    sk_final = Skel("final", (255, 255, 255))
-    sk_main = Skel("main", (255, 255, 255))
-    sk_main_y = Skel("main_y", (255, 214, 0))
+    MAX_LANES = 3
+    lanes_sk = [(Skel(f"l{k}/final", (255, 255, 255)), Skel(f"l{k}/main", (255, 255, 255)),
+                 Skel(f"l{k}/main_y", (255, 214, 0))) for k in range(MAX_LANES)]
     track_ref = {"y": None}
 
+    def n_lanes() -> int:
+        return int(g_lanes.value)
+
     def apply_style(_=None):
-        for sk in (sk_final, sk_main, sk_main_y):
-            sk.style()
-        grid.visible = g_grid.value
+        for trio in lanes_sk:
+            for sk in trio:
+                sk.style()
+        grid.visible = g_grid.value and n_lanes() == 1      # several motions: no shared floor
         server.scene.set_background_image(np.full((4, 4, 3), g_bg.value, np.uint8))
+
+    def lane_slots(B: int) -> np.ndarray:
+        """Screen-horizontal slots: positions along the camera's right vector, centred."""
+        az = np.deg2rad(cam.az.value)
+        right = np.array([np.cos(az), 0.0, -np.sin(az)])     # perpendicular to the view direction
+        ks = np.arange(B) - (B - 1) / 2
+        return ks[:, None] * g_spacing.value * right[None]
 
     def anchor(joints):
         if g_track.value == "off":
@@ -170,13 +190,25 @@ def main():
         return a
 
     def draw(f):
-        a = anchor(f.joints)
+        B = f.joints.shape[0]
         overlay = g_final.value
+        if B == 1:
+            shifts = [-anchor(f.joints[0])]
+        else:   # each motion pinned at its tracked joint (default Hips), side by side on screen
+            k = names.index(g_track.value) if g_track.value != "off" else 0
+            slots = lane_slots(B)
+            shifts = [slots[b] - f.joints[b, k] for b in range(B)]
         with server.atomic():
-            grid.position = -a
-            sk_main.show(None if overlay else f.joints - a)
-            sk_main_y.show(f.joints - a if overlay else None)
-            sk_final.show(f.joints_final - a if overlay else None)
+            grid.position = shifts[0]
+            for b, (sk_final, sk_main, sk_main_y) in enumerate(lanes_sk):
+                if b < B:
+                    sh = shifts[b]
+                    sk_main.show(None if overlay else f.joints[b] + sh)
+                    sk_main_y.show(f.joints[b] + sh if overlay else None)
+                    sk_final.show(f.joints_final[b] + sh if overlay else None)
+                else:
+                    for sk in (sk_final, sk_main, sk_main_y):
+                        sk.show(None)
 
     # -------------------------------------------------------------- live control
     def cycle_levels() -> np.ndarray:
@@ -206,7 +238,13 @@ def main():
         frames = rt.clip_frames("" if g_clip.value == "sample" else g_clip.value)
         track_ref["y"] = None
         history.clear()
-        live.reset(frames[int(g_init.value) % len(frames)], int(g_seed.value))
+        B = n_lanes()
+        if g_same.value:
+            starts = [frames[int(g_init.value) % len(frames)]] * B
+        else:
+            starts = [frames[(int(g_init.value) + b * int(g_offset.value)) % len(frames)] for b in range(B)]
+        live.reset(np.stack(starts), [int(g_seed.value) + b for b in range(B)])
+        apply_style()
 
     state = {"levels": np.zeros(1)}
     history: deque = deque(maxlen=int(120 * GEN_FPS))
@@ -214,7 +252,7 @@ def main():
               g_pattack, g_pdecay, g_base, g_feed, g_root, g_nscale, g_ncoh, g_clipv, g_decode, g_final,
               g_fps, g_realspeed):
         h.on_update(sync)
-    for h in (g_clip, g_init, g_seed):
+    for h in (g_clip, g_init, g_seed, g_lanes, g_same, g_offset):
         h.on_update(restart)
     g_restart.on_click(restart)
     for h in (g_jsize, g_bwidth, g_grid, g_bg):
