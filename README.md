@@ -52,10 +52,9 @@ the pull (more natural poses, but the LaFAN1 prior then pulls the arms back).
 Pinned points (tracked joint, middle hips, held-hand junction) are placed at the camera's look-at point, so
 they stay at the screen centre even after zooming toward the cursor or panning.
 
-LaFAN1's `LeftHand` / `RightHand` joints are wrists (there is no hand beyond them), so joined wrists read as an
-extra joint between two forearms. `hands` draws a hand segment from each wrist along the forearm
-(`hand length`, default 14 cm); when holding hands the partner is placed so its hand overlaps the other hand
-(`grip overlap`), and the clasp (midpoint of the two wrists) is what is pinned at the screen centre.
+Skeletons end at the `LeftHand` / `RightHand` joints. When holding hands, the partner is placed so its Hand
+joint sits beside the other Hand joint (`hand gap`, default = joint size, so the two hand dots just touch;
+same height, side by side on screen), and the midpoint of the two Hand joints is pinned at the screen centre.
 
 `τ ladder`: one clean motion (fed back fully denoised) shown side by side at evenly spaced τ from
 `ladder max τ` down to 0 (`ladder steps`, default 6: 15, 12, 9, 6, 3, 0), each pinned at its hips, with τ

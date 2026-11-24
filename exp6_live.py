@@ -85,8 +85,9 @@ def main():
         g_hstop = server.gui.add_slider(
             "prior cleanup steps", 0, 5, 1, 0,
             hint="Last diffusion steps run without the pull: more = more natural poses, hands further apart.")
-        g_grip = server.gui.add_slider("grip overlap", 0.0, 1.0, 0.05, 0.6,
-                                       hint="How far the two held hands overlap (0 = fingertips touch).")
+        g_hgap = server.gui.add_slider("hand gap (m)", 0.0, 0.3, 0.005, 0.04,
+                                       hint="Distance between the two held Hand joints, side by side on screen "
+                                            "(default = joint size: the two hand dots just touch).")
         g_hswap = server.gui.add_checkbox("swap hands", False,
                                           hint="Use the other hand on each side of every held pair.")
         g_same = server.gui.add_checkbox("same start pose", True,
@@ -112,9 +113,6 @@ def main():
         g_joints = server.gui.add_checkbox("joints", True)
         g_reduced = server.gui.add_checkbox("reduced skeleton", True)
         g_bones = server.gui.add_checkbox("bones", True)
-        g_hands = server.gui.add_checkbox("hands", True,
-                                          hint="LaFAN1 'Hand' joints are wrists; draw a hand segment beyond them.")
-        g_handlen = server.gui.add_slider("hand length (m)", 0.05, 0.3, 0.01, 0.14)
         g_jsize = server.gui.add_slider("joint size", 0.005, 0.2, 0.005, 0.04)
         g_bwidth = server.gui.add_slider("bone width", 0.002, 0.05, 0.001, 0.008)
         g_grid = server.gui.add_checkbox("grid", True)
@@ -179,11 +177,7 @@ def main():
             if self.j.visible:
                 self.j.points = (pts[keep] if g_reduced.value else pts).astype(np.float32)
             if self.b.visible:
-                links = links_red if g_reduced.value else links_full
-                if g_hands.value:     # hand segments: wrist -> tip along the forearm (no dot at the tip)
-                    pts = np.concatenate([pts, hand_tips(pts)])
-                    links = np.concatenate([links, np.array([[LH, J], [RH, J + 1]])])
-                self.b.points = line_dots(pts, links, g_bwidth.value)
+                self.b.points = line_dots(pts, links_red if g_reduced.value else links_full, g_bwidth.value)
 
     MAX_LANES = 8
     lanes_sk = [(Skel(f"l{k}/final", (255, 255, 255)), Skel(f"l{k}/main", (255, 255, 255)),
@@ -210,23 +204,14 @@ def main():
         return "holding" in g_lanes.value
 
     LH, RH, HIPS = names.index("LeftHand"), names.index("RightHand"), names.index("Hips")
-    FOREARM = {LH: names.index("LeftForeArm"), RH: names.index("RightForeArm")}
 
-    def hand_dir(pts, h):
-        v = pts[h] - pts[FOREARM[h]]
-        return v / (np.linalg.norm(v) + 1e-9)
+    def hold_shift(Pa, ha, Pb, hb):
+        """Translation of body b (to the right of a on screen) so its Hand joint sits beside a's Hand
+        joint: `hand gap` apart along the screen-right direction, same height, no other offset."""
+        az = np.deg2rad(cam.az.value)
+        right = np.array([np.cos(az), 0.0, -np.sin(az)])
+        return Pa[ha] + g_hgap.value * right - Pb[hb]
 
-    def hand_tips(pts):
-        L = g_handlen.value
-        return np.stack([pts[LH] + L * hand_dir(pts, LH), pts[RH] + L * hand_dir(pts, RH)])
-
-    def grip_shift(Pa, ha, Pb, hb):
-        """Translation of body b so its hand overlaps body a's hand (both in their own coordinates)."""
-        L = g_handlen.value
-        ua, ub = hand_dir(Pa, ha), hand_dir(Pb, hb)
-        tip_a, tip_b = Pa[ha] + L * ua, Pb[hb] + L * ub
-        # b's fingertip lands on a's hand, `grip overlap` of a hand length back from a's fingertip
-        return tip_a - g_grip.value * L * ua - tip_b
     ladder_labels = [server.scene.add_label(f"/ladder_label{k}", "", visible=False, anchor="bottom-center", font_screen_scale=1.2) for k in range(8)]
     link_dots = add_dots(server, "/hand_links", (255, 255, 255), g_bwidth.value)
 
@@ -263,9 +248,8 @@ def main():
         if B == 1:
             shifts = [-anchor(f.joints[0])]
         elif holding() and B == 2:
-            # B's hand overlaps A's hand; the clasp (midpoint of the two wrists) is pinned at the screen centre
-            sb = grip_shift(f.joints[0], a_hand, f.joints[1], b_hand) if g_hands.value else \
-                f.joints[0, a_hand] - f.joints[1, b_hand]
+            # B's Hand joint beside A's Hand joint; their midpoint is pinned at the screen centre
+            sb = hold_shift(f.joints[0], a_hand, f.joints[1], b_hand)
             clasp = 0.5 * (f.joints[0, a_hand] + f.joints[1, b_hand] + sb)
             shifts = [-clasp, sb - clasp]
         elif holding() and B == 3:
@@ -277,11 +261,9 @@ def main():
                 shifts = [slots[0] - f.joints[0, HIPS], mid, slots[2] - f.joints[2, HIPS]]
                 hand_links = [(1, m_left, 0, a_hand), (1, m_right, 2, b_hand)]
             else:
-                def attach(side, hs, hm):
-                    if g_hands.value:
-                        return mid + grip_shift(f.joints[1], hm, f.joints[side], hs)
-                    return f.joints[1, hm] + mid - f.joints[side, hs]
-                shifts = [attach(0, a_hand, m_left), mid, attach(2, b_hand, m_right)]
+                # left partner's Hand just left of the middle's hand, right partner's just right of it
+                shifts = [mid - hold_shift(f.joints[0], a_hand, f.joints[1], m_left), mid,
+                          mid + hold_shift(f.joints[1], m_right, f.joints[2], b_hand)]
         else:   # each motion pinned at its tracked joint (default Hips), side by side on screen
             k = names.index(g_track.value) if g_track.value != "off" else 0
             slots = lane_slots(B)
@@ -375,7 +357,7 @@ def main():
     for h in (g_clip, g_init, g_seed, g_lanes, g_same, g_offset, g_lsteps, g_lmax):
         h.on_update(restart)
     g_restart.on_click(restart)
-    for h in (g_jsize, g_bwidth, g_grid, g_bg, g_hands, g_handlen, g_grip):
+    for h in (g_jsize, g_bwidth, g_grid, g_bg, g_hgap):
         h.on_update(apply_style)
     g_track.on_update(lambda _: track_ref.update(y=None))
 
